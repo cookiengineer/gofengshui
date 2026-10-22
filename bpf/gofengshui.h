@@ -41,7 +41,11 @@ enum gfs_alloc_op {
 #define GFS_AF_METADATA   (1U << 2)
 #define GFS_AF_NEXT       (1U << 3)
 
-/* Default x86_64 tcache chunk-size ceiling (64 bins). */
+/*
+ * Default x86_64 tcache small-bin chunk-size ceiling. Glibc 2.42+ still uses
+ * 0x410 as the default tcache_max_bytes; large tcache bins are tunable and are
+ * observation-only in userspace.
+ */
 #define GFS_TCACHE_MAX_CHUNK 0x410
 
 /* x86_64 syscall numbers */

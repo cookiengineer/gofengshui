@@ -113,6 +113,13 @@ func (m *Model) SetRegions(regions []Region) {
 	m.hasMaps = true
 }
 
+// Regions returns a copy of the target's mapped address ranges.
+func (m *Model) Regions() []Region {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return append([]Region(nil), m.regions...)
+}
+
 // Apply folds one event into the model and returns any new findings.
 func (m *Model) Apply(ev core.Event) []core.Finding {
 	m.mu.Lock()

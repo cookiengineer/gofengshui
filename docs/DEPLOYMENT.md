@@ -132,6 +132,9 @@ Expected results:
 - C++ allocations are labelled as `new`/`delete` when libstdc++ is present
 - `gofengshui validate` reaches `gfs_sink` with `RDI=0x4141` and exports a
   verified ROP trace to `/reports/rop`
+- `heap.introspect` reports the live tcache layout, per-thread bins and main
+  arena from a stopped target (unprivileged coverage; add to the privileged
+  suite when a report assertion is available)
 
 ## Host-privileged agent
 

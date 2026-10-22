@@ -10,8 +10,11 @@ Currently targets dynamically linked glibc C/C++ programs on `x86_64`.
 
 - eBPF allocator and syscall tracing with an embedded BPF object
 - Heap timeline, size-class analysis, address gaps, reuse tracking
-- glibc profiles 2.26–2.44 with safe-linking awareness
-- Free-list prediction, baseline diffs, and advisory spray recipes
+- glibc profiles 2.26–2.44, including the 2.42 tcache layout and 2.44
+  no-fastbin/16-slot behavior
+- Live tcache and arena introspection from stripped libc (`heap.introspect`)
+- Free-list prediction (model-derived or observed), baseline diffs, and
+  advisory spray recipes
 - Detectors:
   - D1 double/invalid free
   - D2 use-after-free from syscall buffers or freed-chunk watchpoints

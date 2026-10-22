@@ -30,6 +30,7 @@ const (
 	MethodHeapSnapshot    = "heap.snapshot"
 	MethodHeapAnalyze     = "heap.analyze"
 	MethodHeapPredict     = "heap.predict"
+	MethodHeapIntrospect  = "heap.introspect"
 	MethodHeapBaseline    = "heap.baseline"
 	MethodHeapDiff        = "heap.diff"
 	MethodHeapRecipe      = "heap.recipe"

@@ -43,6 +43,8 @@ TESTBINS := $(BUILD_DIR)/testdata/alloc_loop \
             $(BUILD_DIR)/testdata/dlopen_alloc \
             $(BUILD_DIR)/testdata/cxx_alloc \
             $(BUILD_DIR)/testdata/size_swap \
+            $(BUILD_DIR)/testdata/tcache_introspect \
+            $(BUILD_DIR)/testdata/tcache_threads \
             $(BUILD_DIR)/testdata/oom
 
 TESTLIBS := $(BUILD_DIR)/testdata/libgfsplugin.so

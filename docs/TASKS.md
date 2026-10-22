@@ -68,7 +68,7 @@ Status legend: `yes`, `partial`, `no`. Updated incrementally during work.
 | M3.2 | Stop-the-world for all traced threads | yes | yes | yes |
 | M3.3 | fork/exec follow | yes | yes | yes |
 | M3.4 | dlopen rescan / re-attach (`maps.refresh`, resolver retry) | yes | yes | yes |
-| M3.5 | tcache / main_arena introspection | no | no | no |
+| M3.5 | tcache / main_arena introspection | yes | yes | no |
 | M3.6 | Additional syscall coverage (`openat`, `execve`, `sendfile`, `splice`) | yes | yes | yes |
 | M3.7 | OOM tracepoint/kprobe integration | yes | yes | yes |
 | M3.8 | Performance/overhead benchmarks | yes | yes | yes |
@@ -89,6 +89,9 @@ Status legend: `yes`, `partial`, `no`. Updated incrementally during work.
 | M3.23 | Automatic freed-chunk write watchpoints (`--watch-freed`) | yes | yes | yes |
 | M3.24 | D9 allocated-vs-free chunk size mismatch detector | yes | yes | yes |
 | M3.25 | Per-arena bin modeling (tcache stays per-thread) | yes | yes | yes |
+| M3.26 | glibc 2.42+ tcache layout, 2.44 fill count and no-fastbin profile | yes | yes | no |
+| M3.27 | `heap.introspect` tcache/arena introspection on stripped libc | yes | yes | no |
+| M3.28 | Observed-bin prediction (`heap.predict observe`) | yes | yes | no |
 
 ## Privileged Integration Result (2026-10-22)
 
@@ -146,14 +149,17 @@ Privileged suite passed with status 0:
 - glibc `request2size` mapping
 - per-thread tcache LIFO order
 - consuming a predicted chunk on reallocation
-- tcache overflow into fastbin LIFO
+- tcache overflow into fastbin LIFO on pre-2.44 profiles
+- tcache overflow into smallbin FIFO on 2.44 (no fastbins)
 - smallbin FIFO ordering
 - per-thread isolation and `tid: 0` merging
 - glibc profile detection and safe-linking-aware decoding
-- tcache fills with the first seven frees, then fastbin LIFO
+- tcache fills with the profile's fill count (7 through 2.43, 16 from 2.44)
+- observed-bin prediction from `heap.introspect`
 
-It is a userspace model based on observed free/alloc events, not a direct read
-of glibc's tcache or arena structures.
+The default predictor is a userspace model based on observed free/alloc events;
+`heap.predict` with `observe: true` (or a recent `heap.introspect` snapshot)
+uses live tcache state instead.
 
 ## Final Regression (2026-10-22)
 
@@ -180,6 +186,9 @@ privileged container suite.
 - Implemented-but-not-fully-verified items:
   - M1.17 event replay/cursor edge cases beyond the current replay test
   - M3.11 CI assertion DSL beyond the implemented CLI expectation runner
+  - M3.26–M3.28 are covered by unprivileged live ptrace tests and synthetic
+    layout tests; the privileged integration suite does not yet exercise
+    `heap.introspect`
 - All other implemented items are covered by unit tests and the privileged
   integration suite.
 
@@ -201,8 +210,8 @@ privileged container suite.
 
 | Item | Status |
 |---|---|
-| Direct tcache/main_arena/bin introspection | deferred |
-| Allocator-version profiles (glibc 2.26–2.44) | done |
+| Direct tcache/main_arena/bin introspection | done (`heap.introspect`) |
+| Allocator-version profiles (glibc 2.26–2.44) | done (2.42 layout, 2.44 no-fastbin/16-slot) |
 | tcache poisoning / safe-linking anomaly detector (D7) | done |
 | Realloc-style free sequences in predictor | done |
 | C++ new/delete symbol-specific probes | done |

@@ -11,6 +11,9 @@ const (
 	sizeSZ          = 8
 	mallocAlignMask = 15
 	minChunkSize    = 32
+	// minLargeChunk is glibc's MIN_LARGE_SIZE on x86_64. Chunks below it are
+	// inserted directly into smallbins when tcache is full.
+	minLargeChunk = 0x400
 )
 
 type freeKey struct {
@@ -46,6 +49,7 @@ type Prediction struct {
 	Tcache      bool             `json:"tcache"`
 	TcacheCount int              `json:"tcache_count"`
 	FreePool    int              `json:"free_pool"`
+	Observed    bool             `json:"observed,omitempty"`
 	Candidates  []PredictedChunk `json:"candidates"`
 	Notes       []string         `json:"notes,omitempty"`
 }
@@ -179,26 +183,38 @@ func (m *Model) Predict(tid uint32, reqSize uint64, limit int) Prediction {
 		for i := len(tcacheSeq) - 1; i >= 0; i-- {
 			add(tcacheSeq[i], "tcache-lifo", "high")
 		}
-		if chunk <= m.profile.FastbinMaxChunk {
+		if m.profile.Fastbins && chunk <= m.profile.FastbinMaxChunk {
 			// Fastbins are LIFO but only after tcache is exhausted.
 			for i := len(older) - 1; i >= 0; i-- {
 				add(older[i], "fastbin-lifo", "medium")
 			}
-		} else {
-			// Smallbin-style free chunks are consumed FIFO.
+		} else if chunk < minLargeChunk {
+			// Smallbin-style free chunks are consumed FIFO. This is also the
+			// path used by glibc 2.44+, which no longer has fastbins.
 			for _, e := range older {
 				add(e, "smallbin-fifo", "medium")
+			}
+		} else {
+			// Large frees pass through the unsorted list before being sorted
+			// into largebins; keep the ordering advisory.
+			for i := len(older) - 1; i >= 0; i-- {
+				add(older[i], "free-order", "low")
 			}
 		}
 		p.Notes = append(p.Notes,
 			fmt.Sprintf("model: glibc %s tcache LIFO, max %d chunks", m.profile.Version, m.profile.TcacheCount),
-			fmt.Sprintf("model: fastbin LIFO for chunk <= 0x%x; smallbin FIFO otherwise", m.profile.FastbinMaxChunk),
 		)
+		if m.profile.Fastbins {
+			p.Notes = append(p.Notes,
+				fmt.Sprintf("model: fastbin LIFO for chunk <= 0x%x; smallbin FIFO otherwise", m.profile.FastbinMaxChunk))
+		} else {
+			p.Notes = append(p.Notes, "model: no fastbins; smallbin FIFO after tcache")
+		}
 		if m.profile.SafeLinking {
 			p.Notes = append(p.Notes, "model: safe-linking enabled (glibc >= 2.32)")
 		}
 	} else if !m.profile.Tcache {
-		if chunk <= m.profile.FastbinMaxChunk {
+		if m.profile.Fastbins && chunk <= m.profile.FastbinMaxChunk {
 			for i := len(seq) - 1; i >= 0; i-- {
 				add(seq[i], "fastbin-lifo", "medium")
 			}
@@ -220,6 +236,66 @@ func (m *Model) Predict(tid uint32, reqSize uint64, limit int) Prediction {
 	if tid == 0 {
 		p.Notes = append(p.Notes, "tid 0 merges free sequences from multiple threads")
 	}
+	return p
+}
+
+// PredictObserved builds a prediction from a live tcache snapshot. It falls
+// back to the event-derived model when the observed bin is empty or the size
+// class is not a small tcache bin.
+func PredictObserved(m *Model, intro *Introspection, tid uint32, reqSize uint64, limit int) Prediction {
+	if intro == nil || m == nil {
+		if m != nil {
+			return m.Predict(tid, reqSize, limit)
+		}
+		return Prediction{RequestSize: reqSize}
+	}
+	if limit <= 0 {
+		limit = 16
+	}
+	chunk := RequestChunkSize(reqSize)
+	p := Prediction{
+		TID: tid, RequestSize: reqSize, ChunkSize: chunk,
+		Glibc: m.Profile().Version, SafeLinking: m.Profile().SafeLinking,
+		Tcache: m.Profile().Tcache, Observed: true,
+	}
+	if chunk < 32 || chunk > 0x410 {
+		p.Observed = false
+		fallback := m.Predict(tid, reqSize, limit)
+		fallback.Notes = append(fallback.Notes, "observed lookup: size class is not a small tcache bin")
+		return fallback
+	}
+	idx := int((chunk - 32) / 16)
+	var entries []uint64
+	for _, th := range intro.Threads {
+		if tid != 0 && th.TID != tid {
+			continue
+		}
+		for _, bin := range th.Bins {
+			if bin.Index == idx {
+				entries = append(entries, bin.Entries...)
+				break
+			}
+		}
+	}
+	if len(entries) == 0 {
+		p.Observed = false
+		fallback := m.Predict(tid, reqSize, limit)
+		fallback.Notes = append(fallback.Notes, "observed tcache bin is empty; using event model")
+		return fallback
+	}
+	if len(entries) > limit {
+		entries = entries[:limit]
+	}
+	for i, addr := range entries {
+		p.Candidates = append(p.Candidates, PredictedChunk{
+			Rank: i + 1, Addr: addr, ChunkSize: chunk, TID: tid,
+			Source: "observed-tcache", Confidence: "high",
+		})
+	}
+	p.TcacheCount = len(entries)
+	p.FreePool = len(entries)
+	p.Notes = append(p.Notes,
+		fmt.Sprintf("observed: live tcache bin %d (%d entries)", idx, len(entries)))
 	return p
 }
 

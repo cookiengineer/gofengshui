@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -100,6 +101,9 @@ type Session struct {
 	lastStop   *debugger.Stop
 	ropDone    chan *ROPResult
 	started    time.Time
+
+	introspection   *heap.Introspection
+	introspectionTS time.Time
 }
 
 func detectEngine(m *heap.Model) *detect.Engine { return detect.New(m) }
@@ -398,6 +402,8 @@ func (s *Session) Handle(ctx context.Context, conn *transport.Conn, f *proto.Fra
 		s.reply(conn, f, s.model.Analyze(), nil)
 	case proto.MethodHeapPredict:
 		s.heapPredict(conn, f)
+	case proto.MethodHeapIntrospect:
+		s.heapIntrospect(conn, f)
 	case proto.MethodHeapBaseline:
 		s.heapBaseline(conn, f)
 	case proto.MethodHeapDiff:
@@ -729,27 +735,162 @@ func (s *Session) ReattachAllocators() ([]string, []string) {
 
 func (s *Session) heapPredict(conn *transport.Conn, f *proto.Frame) {
 	var p struct {
-		TID   uint32 `json:"tid"`
-		Size  uint64 `json:"size"`
-		Limit int    `json:"limit"`
+		TID     uint32 `json:"tid"`
+		Size    uint64 `json:"size"`
+		Limit   int    `json:"limit"`
+		Observe bool   `json:"observe"`
 	}
 	_ = f.DecodeParams(&p)
 	if p.Size == 0 {
 		p.Size = 1
 	}
-	s.reply(conn, f, s.model.Predict(p.TID, p.Size, p.Limit), nil)
+	var observed *heap.Introspection
+	if p.Observe {
+		res, err := s.collectIntrospection(true, p.TID)
+		if err != nil {
+			s.reply(conn, f, nil, &proto.Error{Code: "introspect_failed", Message: err.Error()})
+			return
+		}
+		observed = &res
+	} else {
+		observed = s.cachedIntrospection(2 * time.Second)
+	}
+	s.reply(conn, f, heap.PredictObserved(s.model, observed, p.TID, p.Size, p.Limit), nil)
+}
+
+func (s *Session) heapIntrospect(conn *transport.Conn, f *proto.Frame) {
+	var p struct {
+		TID   uint32 `json:"tid"`
+		Pause *bool  `json:"pause"`
+	}
+	_ = f.DecodeParams(&p)
+	pause := true
+	if p.Pause != nil {
+		pause = *p.Pause
+	}
+	res, err := s.collectIntrospection(pause, p.TID)
+	if err != nil {
+		s.reply(conn, f, nil, &proto.Error{Code: "introspect_failed", Message: err.Error()})
+		return
+	}
+	s.reply(conn, f, res, nil)
+}
+
+// collectIntrospection takes a consistent allocator snapshot. It pauses every
+// traced thread unless pause is false or the target is already stopped, and
+// resumes only the threads it stopped itself.
+func (s *Session) collectIntrospection(pause bool, tidFilter uint32) (heap.Introspection, error) {
+	wasRunning := !s.tracer.AllStopped()
+	resumed := false
+	defer func() {
+		if resumed {
+			_ = s.ContinueAll()
+		}
+	}()
+	if pause && wasRunning {
+		resumed = true
+		if err := s.tracer.Pause(); err != nil {
+			return heap.Introspection{}, err
+		}
+		if !s.tracer.WaitStopped(5 * time.Second) {
+			return heap.Introspection{}, fmt.Errorf("target did not stop for introspection")
+		}
+	}
+	if !s.tracer.AllStopped() {
+		return heap.Introspection{}, fmt.Errorf("target is running; call pause first or use pause:true")
+	}
+
+	s.refreshRegions(true)
+	libcPath, libcBase := s.libcImage()
+	var warnings []string
+	var threads []heap.ThreadTLS
+	tids := s.tracer.Threads()
+	sort.Ints(tids)
+	if tidFilter != 0 {
+		tids = []int{int(tidFilter)}
+	}
+	if len(tids) == 0 {
+		tids = []int{s.tracer.PID()}
+	}
+	for _, tid := range tids {
+		regs, err := s.tracer.GetRegisters(tid)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("tid %d registers: %v", tid, err))
+			continue
+		}
+		threads = append(threads, heap.ThreadTLS{TID: uint32(tid), FSBase: regs.FSBase})
+	}
+
+	res := heap.Introspect(heap.IntrospectOptions{
+		Reader:   s.readMemory,
+		LibcPath: libcPath,
+		LibcBase: libcBase,
+		Regions:  s.model.Regions(),
+		Profile:  s.model.Profile(),
+		Threads:  threads,
+	})
+	res.Warnings = append(res.Warnings, warnings...)
+
+	s.mu.Lock()
+	s.introspection = &res
+	s.introspectionTS = time.Now()
+	s.mu.Unlock()
+	return res, nil
+}
+
+func (s *Session) cachedIntrospection(maxAge time.Duration) *heap.Introspection {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.introspection == nil {
+		return nil
+	}
+	if maxAge > 0 && time.Since(s.introspectionTS) > maxAge {
+		return nil
+	}
+	res := *s.introspection
+	return &res
+}
+
+func (s *Session) libcImage() (string, uint64) {
+	path := s.target.LibcPath
+	base := s.target.LibcBase
+	r := s.getResolver()
+	if r == nil {
+		return path, base
+	}
+	for _, m := range r.Modules {
+		name := filepath.Base(m.Path)
+		if !strings.Contains(name, "libc.so") {
+			continue
+		}
+		if base != 0 && m.Base != base {
+			continue
+		}
+		if m.FSPath != "" {
+			path = m.FSPath
+		} else if m.Path != "" {
+			path = m.Path
+		}
+		if base == 0 {
+			base = m.Base
+		}
+		break
+	}
+	return path, base
 }
 
 func (s *Session) heapSnapshot(conn *transport.Conn, f *proto.Frame) {
+	observed := s.cachedIntrospection(0)
 	s.reply(conn, f, map[string]any{
-		"target":      s.target,
-		"allocations": s.model.Allocations(false),
-		"tombstones":  s.model.Tombstones(),
-		"mappings":    s.model.Mappings(),
-		"stats":       s.model.Stats(),
-		"profile":     s.model.Profile(),
-		"analysis":    s.model.Analyze(),
-		"findings":    s.engine.Recent(),
+		"target":        s.target,
+		"allocations":   s.model.Allocations(false),
+		"tombstones":    s.model.Tombstones(),
+		"mappings":      s.model.Mappings(),
+		"stats":         s.model.Stats(),
+		"profile":       s.model.Profile(),
+		"analysis":      s.model.Analyze(),
+		"introspection": observed,
+		"findings":      s.engine.Recent(),
 	}, nil)
 }
 
@@ -1293,6 +1434,11 @@ func (s *Session) WaitExit(timeout time.Duration) bool {
 // Analyze returns the current heap-feng-shui analysis.
 func (s *Session) Analyze() heap.Analysis { return s.model.Analyze() }
 
+// Introspect pauses the target as needed and returns a live allocator snapshot.
+func (s *Session) Introspect(tid uint32) (heap.Introspection, error) {
+	return s.collectIntrospection(true, tid)
+}
+
 // Model exposes the heap model for library users.
 func (s *Session) Model() *heap.Model { return s.model }
 
@@ -1329,6 +1475,7 @@ func (s *Session) Export(dir string) error {
 		baselines[k] = v
 	}
 	markers := append([]Marker(nil), s.markers...)
+	introspection := s.introspection
 	s.mu.Unlock()
 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -1338,15 +1485,16 @@ func (s *Session) Export(dir string) error {
 		return err
 	}
 	if err := export.JSON(filepath.Join(dir, "heap.json"), map[string]any{
-		"allocations": s.model.Allocations(false),
-		"tombstones":  s.model.Tombstones(),
-		"mappings":    s.model.Mappings(),
-		"stats":       s.model.Stats(),
-		"profile":     s.model.Profile(),
-		"analysis":    s.model.Analyze(),
-		"backfill":    backfill,
-		"bpf":         bpfValue(bpfStats, hasBPF),
-		"findings":    s.engine.Recent(),
+		"allocations":   s.model.Allocations(false),
+		"tombstones":    s.model.Tombstones(),
+		"mappings":      s.model.Mappings(),
+		"stats":         s.model.Stats(),
+		"profile":       s.model.Profile(),
+		"analysis":      s.model.Analyze(),
+		"introspection": introspection,
+		"backfill":      backfill,
+		"bpf":           bpfValue(bpfStats, hasBPF),
+		"findings":      s.engine.Recent(),
 	}); err != nil {
 		return err
 	}
@@ -1370,7 +1518,8 @@ func (s *Session) Export(dir string) error {
 		"profile": s.model.Profile(),
 		"stats":   s.model.Stats(), "sink": sink, "rop": rop,
 		"markers": markers, "backfill": backfill,
-		"bpf": bpfValue(bpfStats, hasBPF),
+		"introspection": introspection,
+		"bpf":           bpfValue(bpfStats, hasBPF),
 	}); err != nil {
 		return err
 	}

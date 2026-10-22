@@ -68,7 +68,7 @@ func (a *Agent) Handle(ctx context.Context, conn *transport.Conn, f *proto.Frame
 func methods() []string {
 	return []string{
 		proto.MethodSessionCreate, proto.MethodSessionClose, proto.MethodSessionStatus,
-		proto.MethodEventsSubscribe, proto.MethodHeapQuery, proto.MethodHeapSnapshot, proto.MethodHeapAnalyze, proto.MethodHeapPredict, proto.MethodMapsRefresh,
+		proto.MethodEventsSubscribe, proto.MethodHeapQuery, proto.MethodHeapSnapshot, proto.MethodHeapAnalyze, proto.MethodHeapPredict, proto.MethodHeapIntrospect, proto.MethodMapsRefresh,
 		proto.MethodMemRead, proto.MethodMemWrite, proto.MethodRegsGet, proto.MethodStackGet,
 		proto.MethodBreakSet, proto.MethodBreakClear, proto.MethodWatchSet, proto.MethodWatchClear,
 		proto.MethodPause, proto.MethodResume, proto.MethodStep, proto.MethodMark,

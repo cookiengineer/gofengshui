@@ -115,6 +115,12 @@ allocator profile end-to-end:
   after `maps.refresh`
 - `cxx_alloc` allocates through libstdc++ and emits `new`/`delete` labelled
   events
+- `heap.introspect` is covered by unprivileged live ptrace tests:
+  `build/testdata/tcache_introspect` fills the tcache (16 slots on 2.44, 7 on
+  older glibc) and spills the rest, while `build/testdata/tcache_threads`
+  verifies per-thread snapshots and thread arenas. Synthetic tests cover the
+  legacy `counts[64]` and modern `num_slots[76]` layouts plus safe-linking
+  decode.
 - `deploy/run-integration.sh` re-checks these report fields on the host and
   fails the run if they are missing
 

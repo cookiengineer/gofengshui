@@ -11,18 +11,39 @@ import (
 
 // Profile describes the glibc allocator behavior that matters to the heap
 // model. The values are intentionally limited to x86_64 defaults.
+//
+// Glibc 2.42 changed the per-thread cache from char counts[64] followed by
+// entries[64] to uint16_t num_slots[76] followed by entries[76]. Glibc 2.44
+// removed fastbins and raised TCACHE_FILL_COUNT from 7 to 16. Layout describes
+// which tcache structure the target uses; the legacy field values are kept for
+// JSON compatibility.
 type Profile struct {
 	Version         string `json:"version"`
 	Major           int    `json:"major"`
 	Minor           int    `json:"minor"`
 	Source          string `json:"source"`
 	Tcache          bool   `json:"tcache"`
+	TcacheLayout    string `json:"tcache_layout"`
 	TcacheBins      int    `json:"tcache_bins"`
+	TcacheSlotSize  int    `json:"tcache_slot_size"`
 	TcacheMaxChunk  uint64 `json:"tcache_max_chunk"`
 	TcacheCount     int    `json:"tcache_count"`
 	TcacheKey       bool   `json:"tcache_key"`
 	SafeLinking     bool   `json:"safe_linking"`
+	Fastbins        bool   `json:"fastbins"`
 	FastbinMaxChunk uint64 `json:"fastbin_max_chunk"`
+}
+
+const (
+	TcacheLayoutLegacy = "legacy-counts-64"
+	TcacheLayoutModern = "num-slots-76"
+)
+
+func tcacheLayoutForMinor(minor int) string {
+	if minor >= 42 {
+		return TcacheLayoutModern
+	}
+	return TcacheLayoutLegacy
 }
 
 var (
@@ -51,17 +72,32 @@ func ProfileForVersion(version string) (Profile, bool) {
 		return Profile{}, false
 	}
 	p := Profile{
-		Version:         fmt.Sprintf("%d.%d", major, minor),
-		Major:           major,
-		Minor:           minor,
-		Source:          "override",
-		FastbinMaxChunk: 0x80,
+		Version:  fmt.Sprintf("%d.%d", major, minor),
+		Major:    major,
+		Minor:    minor,
+		Source:   "override",
+		Fastbins: minor < 44,
+	}
+	if minor < 44 {
+		p.FastbinMaxChunk = 0x80
 	}
 	if minor >= 26 {
 		p.Tcache = true
+		p.TcacheLayout = tcacheLayoutForMinor(minor)
 		p.TcacheBins = 64
+		p.TcacheSlotSize = 1
 		p.TcacheMaxChunk = 0x410
 		p.TcacheCount = 7
+		if minor >= 42 {
+			p.TcacheBins = 76
+			p.TcacheSlotSize = 2
+		}
+		// 2.43 is a transition point we do not model separately. Use the
+		// 2.42 layout/count as the fallback; heap.introspect infers the real
+		// tcache layout and arena shape from a live target.
+		if minor >= 44 {
+			p.TcacheCount = 16
+		}
 	}
 	if minor >= 29 {
 		p.TcacheKey = true
@@ -133,7 +169,11 @@ func (p Profile) String() string {
 	}
 	tcache := "no-tcache"
 	if p.Tcache {
-		tcache = "tcache"
+		tcache = fmt.Sprintf("tcache-%d", p.TcacheBins)
 	}
-	return fmt.Sprintf("glibc %s (%s, %s)", p.Version, tcache, safe)
+	fast := "no-fastbins"
+	if p.Fastbins {
+		fast = "fastbins"
+	}
+	return fmt.Sprintf("glibc %s (%s, %s, %s)", p.Version, tcache, safe, fast)
 }

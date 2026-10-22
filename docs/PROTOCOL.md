@@ -92,7 +92,8 @@ module/symbol/offset where resolvable).
 {"method":"heap.query","params":{"session":"s1","id":12}}
 {"method":"heap.query","params":{"session":"s1","live":true,"limit":100}}
 {"method":"heap.analyze","params":{"session":"s1"}}
-{"method":"heap.predict","params":{"session":"s1","tid":7,"size":24,"limit":16}}
+{"method":"heap.predict","params":{"session":"s1","tid":7,"size":24,"limit":16,"observe":true}}
+{"method":"heap.introspect","params":{"session":"s1","tid":0,"pause":true}}
 {"method":"heap.baseline","params":{"session":"s1","name":"after-setup","path":"/tmp/base.json"}}
 {"method":"heap.diff","params":{"session":"s1","name":"after-setup"}}
 {"method":"heap.recipe","params":{"session":"s1","tid":7,"size":24,"count":8}}
@@ -108,6 +109,20 @@ override detection.
 
 `heap.predict` returns likely next allocation addresses for a requested size,
 using the detected profile for tcache size/count, safe-linking and bin limits.
+Set `observe: true` to pause the target, take a live allocator snapshot and use
+it for the prediction; otherwise a recent cached snapshot (under two seconds)
+is used when available, with the event-derived model as fallback. Predictions
+from a live snapshot report `observed: true`.
+
+`heap.introspect` reads glibc's actual per-thread tcache and arena structures.
+It returns one entry per stopped thread (`tcache_addr`, `layout`, `fill_count`
+and non-empty `bins`) and the main/thread `arenas` with their top chunk and
+free bins. The `layout` is `legacy-counts-64` for glibc through 2.41 or
+`num-slots-76` for glibc 2.42+. When `pause` is omitted or true, the agent
+stops all traced threads for a consistent read and resumes only the threads it
+stopped. `pause: false` requires the target to be stopped already. Observed
+bin entries are user pointers in allocation order. The result is also cached
+for `heap.snapshot` and written to `heap.json` on export.
 
 `heap.baseline` stores a labeled analysis snapshot and optionally writes it to
 `path`; `heap.diff` compares the current heap against that snapshot (size-class,
@@ -120,12 +135,14 @@ modules available to later symbol lookups. It also reattaches allocator probes
 for all current threads and libc-like modules, returning `allocator_paths` and
 `threads` in the result.
 
-It models glibc `request2size`, per-thread tcache LIFO (7 chunks), fastbin
-LIFO for chunk sizes up to `0x80`, and smallbin FIFO above that. Tcache is
-per-thread; fastbins and smallbins are keyed by the owning heap/arena region.
-`tid: 0` merges free sequences across threads. Candidates include source and
-confidence (`tcache-lifo`/high, `fastbin-lifo`/medium,
-`smallbin-fifo`/medium, `free-order`/low).
+It models glibc `request2size`, per-thread tcache LIFO (7 chunks through 2.43,
+16 chunks from 2.44), fastbin LIFO for chunk sizes up to `0x80` when fastbins
+exist, and smallbin FIFO above that. Glibc 2.42 changed the tcache layout to
+`uint16_t num_slots[76]`; glibc 2.44 removed fastbins. Tcache is per-thread;
+fastbins and smallbins are keyed by the owning heap/arena region. `tid: 0`
+merges free sequences across threads. Candidates include source and confidence
+(`tcache-lifo`/high, `fastbin-lifo`/medium, `smallbin-fifo`/medium,
+`free-order`/low, and `observed-tcache`/high for live snapshots).
 
 ## Memory and registers
 
@@ -225,7 +242,8 @@ buffer, and emits a `rop` event with `verified: true/false`.
 Exports:
 
 - `events.jsonl`
-- `heap.json`
+- `heap.json` (including the last `heap.introspect` snapshot when one was
+  taken)
 - `rop.json` when a trace exists
 - `summary.json`
 - `report.md`
@@ -252,4 +270,5 @@ with `kill:true` before exiting. This is the normal CI/remote driver.
 `bad_type`, `bad_params`, `no_session`, `create_failed`, `unknown_method`,
 `not_found`, `read_failed`, `write_failed`, `regs_failed`, `symbol`,
 `break_failed`, `watch_failed`, `pause_failed`, `resume_failed`,
-`step_failed`, `sink_failed`, `rop_failed`, `export_failed`, `marshal`.
+`step_failed`, `sink_failed`, `rop_failed`, `introspect_failed`,
+`export_failed`, `marshal`.

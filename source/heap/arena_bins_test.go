@@ -17,7 +17,7 @@ func fillArena(t *testing.T, m *Model, tid uint32, base uint64, startTS int64) {
 }
 
 func TestArenaBinsSeparate(t *testing.T) {
-	m := NewModel()
+	m := NewModelWithProfile(mustProfile(t, "2.31"))
 	m.SetRegions([]Region{
 		{Start: 0x1000, End: 0x2000, Path: "[heap]"},
 		{Start: 0x10000, End: 0x11000},
@@ -50,7 +50,7 @@ func TestArenaBinsSeparate(t *testing.T) {
 }
 
 func TestArenaBinKeys(t *testing.T) {
-	m := NewModel()
+	m := NewModelWithProfile(mustProfile(t, "2.31"))
 	m.SetRegions([]Region{
 		{Start: 0x1000, End: 0x2000, Path: "[heap]"},
 		{Start: 0x10000, End: 0x11000},

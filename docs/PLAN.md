@@ -131,9 +131,17 @@ Allocation {
   gaps and address reuse.
 - Allocator profiles: detect glibc 2.26–2.44 behavior from the target libc
   (`tcache`, safe-linking, tcache key, bin limits) with an explicit override.
+  Glibc 2.42 uses the `num_slots[76]` tcache layout; glibc 2.44 raises the
+  fill count to 16 and removes fastbins.
+- Direct allocator introspection: locate stripped-libc `tcache` TLS slots via
+  `R_X86_64_TPOFF64` relocations and thread `fs_base`, validate both tcache
+  layouts, walk safe-linked bins, and scan main/thread arenas. Live tcache
+  state is preferred over the event model when available.
 - Allocation prediction: profile-driven glibc request2size, per-thread tcache
-  LIFO (first 7 frees), plus fastbin LIFO and smallbin FIFO ordering keyed by
-  arena. Arena regions are refreshed from maps as threads create heaps.
+  LIFO (7 frees through 2.43, 16 from 2.44), plus fastbin LIFO where fastbins
+  exist and smallbin FIFO ordering keyed by arena. Arena regions are refreshed
+  from maps as threads create heaps; live tcache bins override the model when
+  available.
 - Realloc-aware timeline: moving reallocs free the old chunk; in-place reallocs
   preserve the allocation ID.
 - Baseline/diff snapshots and advisory spray recipes (`heap.baseline`,
@@ -187,7 +195,8 @@ Core methods:
 ```
 session.create / session.close / session.status
 events.subscribe / events.cursor
-heap.query / heap.snapshot / heap.predict / heap.baseline / heap.diff / heap.recipe /
+heap.query / heap.snapshot / heap.predict / heap.introspect /
+heap.baseline / heap.diff / heap.recipe /
 mem.read / mem.write / regs.get / stack.get
 break.set / break.clear / watch.set / watch.clear
 pause / resume / step / mark
@@ -265,6 +274,12 @@ in `source/`.
 - Multi-thread precision is limited in v1.
 - D7 can report a medium-severity link for tcache neighbors that were freed
   before an attach session started; spawn mode has a complete free history.
+- Direct introspection depends on the target libc exposing
+  `R_X86_64_TPOFF64` relocations and on supported tcache arena layouts.
+  Glibc 2.43 is treated as the 2.42 layout fallback because its release was
+  not separately characterized; the live snapshot overrides the version
+  fallback where possible. Large tcache bins (a tunable beyond the default
+  0x410 ceiling) are observation-only.
 - ASLR and scheduling limit determinism; use relative offsets and recorded
   baselines.
 - The agent is root-equivalent and belongs in a sandboxed CTF/CI environment.
@@ -278,8 +293,11 @@ Implemented and locally tested:
 - repository/build pipeline and embedded BPF object generation
 - glibc allocator uprobes and raw syscall tracing source
 - heap model, tombstones, D1/D2/D3 findings
-- glibc allocator profiles, safe-linking-aware prediction and D7 tcache link
-  anomaly detection
+- glibc allocator profiles (including the 2.42 tcache layout and 2.44
+  no-fastbin/16-slot behavior), safe-linking-aware prediction and D7 tcache
+  link anomaly detection
+- live tcache/arena introspection via stripped-libc TLS relocation discovery
+  (`heap.introspect`), with observed-bin prediction
 - realloc-aware heap timeline, baseline diffs and spray recipe generation
 - live hardware watchpoints on heap-model allocation IDs
 - opt-in automatic write watchpoints on recently freed chunks (`--watch-freed`)
@@ -325,7 +343,6 @@ Privileged end-to-end verification (2026-10-22):
 
 Deferred:
 
-- direct tcache/main_arena introspection
 - memcg OOM tracepoints
 - race/TOCTOU correlation research
 - musl and Go runtime backends, arm64 support

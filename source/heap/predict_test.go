@@ -54,7 +54,7 @@ func TestPredictTcacheLIFOAndConsume(t *testing.T) {
 }
 
 func TestPredictTcacheOverflowFastbin(t *testing.T) {
-	m := NewModel()
+	m := NewModelWithProfile(mustProfile(t, "2.31"))
 	for i := 0; i < 10; i++ {
 		a := uint64(0x1000 + i*0x20)
 		m.Apply(evAt(core.EventAlloc, 1, a, 0x20, int64(i)))
@@ -82,8 +82,44 @@ func TestPredictTcacheOverflowFastbin(t *testing.T) {
 	}
 }
 
+func TestPredictTcache16NoFastbins(t *testing.T) {
+	m := NewModelWithProfile(mustProfile(t, "2.44"))
+	const n = 20
+	for i := 0; i < n; i++ {
+		a := uint64(0x1000 + i*0x20)
+		m.Apply(evAt(core.EventAlloc, 1, a, 0x20, int64(i)))
+	}
+	for i := 0; i < n; i++ {
+		a := uint64(0x1000 + i*0x20)
+		m.Apply(evAt(core.EventFree, 1, a, 0x20, int64(100+i)))
+	}
+	p := m.Predict(1, 0x18, 24)
+	if p.TcacheCount != 16 || len(p.Candidates) != n {
+		t.Fatalf("unexpected prediction: %#v", p)
+	}
+	// glibc 2.44 caches 16 chunks LIFO; the four oldest frees go to a
+	// smallbin and are consumed FIFO.
+	for i := 0; i < 16; i++ {
+		want := uint64(0x1000 + (15-i)*0x20)
+		if p.Candidates[i].Addr != want || p.Candidates[i].Source != "tcache-lifo" {
+			t.Fatalf("candidate %d = %#v want 0x%x tcache-lifo", i, p.Candidates[i], want)
+		}
+	}
+	for i := 16; i < n; i++ {
+		want := uint64(0x1000 + i*0x20)
+		if p.Candidates[i].Addr != want || p.Candidates[i].Source != "smallbin-fifo" {
+			t.Fatalf("candidate %d = %#v want 0x%x smallbin-fifo", i, p.Candidates[i], want)
+		}
+	}
+	for _, c := range p.Candidates {
+		if c.Source == "fastbin-lifo" {
+			t.Fatalf("glibc 2.44 prediction used a fastbin: %#v", c)
+		}
+	}
+}
+
 func TestPredictSmallbinFIFO(t *testing.T) {
-	m := NewModel()
+	m := NewModelWithProfile(mustProfile(t, "2.31"))
 	for i := 0; i < 10; i++ {
 		a := uint64(0x2000 + i*0x90)
 		m.Apply(evAt(core.EventAlloc, 1, a, 0x90, int64(i)))
