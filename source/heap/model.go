@@ -48,6 +48,8 @@ type Model struct {
 	allocs  map[uint64]*core.Allocation
 	byID    map[uint64]*core.Allocation
 	reuses  map[uint64]int
+	freeSeq map[freeKey][]freeEntry
+	freeLoc map[uint64]freeKey
 	tombs   map[uint64]Tombstone
 	mmaps   map[uint64]Mmap
 	pending map[uint32]pendingMmap
@@ -60,6 +62,8 @@ func NewModel() *Model {
 		allocs:  make(map[uint64]*core.Allocation),
 		byID:    make(map[uint64]*core.Allocation),
 		reuses:  make(map[uint64]int),
+		freeSeq: make(map[freeKey][]freeEntry),
+		freeLoc: make(map[uint64]freeKey),
 		tombs:   make(map[uint64]Tombstone),
 		mmaps:   make(map[uint64]Mmap),
 		pending: make(map[uint32]pendingMmap),
@@ -151,6 +155,7 @@ func (m *Model) applyAlloc(ev core.Event) {
 		Generation:  m.nextID,
 		LastEventID: m.seq,
 	}
+	m.consumeFree(ev.Addr)
 	m.allocs[a.Addr] = a
 	m.byID[a.ID] = a
 	m.reuses[a.Addr]++
@@ -165,6 +170,9 @@ func (m *Model) applyFree(ev core.Event, double bool) {
 			a.ChunkSize = ev.Size
 		}
 		m.tombs[a.Addr] = Tombstone{Addr: a.Addr, Size: a.ChunkSize, TS: a.FreeTS, TID: ev.TID}
+		if !double {
+			m.recordFree(a.Addr, a.ChunkSize, ev.TID, a.FreeTS)
+		}
 		return
 	}
 	size := ev.Size
@@ -409,6 +417,8 @@ func (m *Model) Reset() {
 	m.allocs = make(map[uint64]*core.Allocation)
 	m.byID = make(map[uint64]*core.Allocation)
 	m.reuses = make(map[uint64]int)
+	m.freeSeq = make(map[freeKey][]freeEntry)
+	m.freeLoc = make(map[uint64]freeKey)
 	m.tombs = make(map[uint64]Tombstone)
 	m.mmaps = make(map[uint64]Mmap)
 	m.pending = make(map[uint32]pendingMmap)

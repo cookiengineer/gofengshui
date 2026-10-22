@@ -310,6 +310,8 @@ func (s *Session) Handle(ctx context.Context, conn *transport.Conn, f *proto.Fra
 		s.heapSnapshot(conn, f)
 	case proto.MethodHeapAnalyze:
 		s.reply(conn, f, s.model.Analyze(), nil)
+	case proto.MethodHeapPredict:
+		s.heapPredict(conn, f)
 	case proto.MethodMemRead:
 		s.memRead(conn, f)
 	case proto.MethodMemWrite:
@@ -425,6 +427,19 @@ func (s *Session) heapQuery(conn *transport.Conn, f *proto.Frame) {
 		"stats":       s.model.Stats(),
 		"analysis":    s.model.Analyze(),
 	}, nil)
+}
+
+func (s *Session) heapPredict(conn *transport.Conn, f *proto.Frame) {
+	var p struct {
+		TID   uint32 `json:"tid"`
+		Size  uint64 `json:"size"`
+		Limit int    `json:"limit"`
+	}
+	_ = f.DecodeParams(&p)
+	if p.Size == 0 {
+		p.Size = 1
+	}
+	s.reply(conn, f, s.model.Predict(p.TID, p.Size, p.Limit), nil)
 }
 
 func (s *Session) heapSnapshot(conn *transport.Conn, f *proto.Frame) {
@@ -1049,4 +1064,9 @@ func (s *Session) ClearBreak(addr uint64) error { return s.tracer.ClearBreakpoin
 // SymbolAddress resolves a symbol to its runtime address.
 func (s *Session) SymbolAddress(symbol string) (uint64, error) {
 	return s.resolveSymbol("", symbol)
+}
+
+// Predict reports likely next allocation addresses for a request size.
+func (s *Session) Predict(tid uint32, size uint64, limit int) heap.Prediction {
+	return s.model.Predict(tid, size, limit)
 }

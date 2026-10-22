@@ -77,6 +77,7 @@ Status legend: `yes`, `partial`, `no`. Updated incrementally during work.
 | M3.11 | Docs and CI assertion DSL | yes | partial | no |
 | M3.12 | Heap-feng-shui analysis (size classes, gaps, reuse) | yes | yes | yes |
 | M3.13 | Per-thread allocator uprobes for new threads | yes | yes | yes |
+| M3.14 | Tcache/free-list reuse prediction (`heap.predict`) | yes | yes | yes |
 
 ## Privileged Integration Result (2026-10-22)
 
@@ -100,6 +101,20 @@ All checks passed with status 0:
 - fork/exec allocations from 2 processes
 - `rop.arm` and `hijack.watch` both verified with `RDI=0x4141`
 - unix-socket session + live D2 event + close
+
+## Prediction Status
+
+`heap.predict` is implemented with deterministic unit tests for:
+
+- glibc `request2size` mapping
+- per-thread tcache LIFO order
+- consuming a predicted chunk on reallocation
+- tcache overflow into fastbin LIFO
+- smallbin FIFO ordering
+- per-thread isolation and `tid: 0` merging
+
+It is a userspace model based on observed free/alloc events, not a direct read
+of glibc's tcache or arena structures.
 
 ## Verification Notes
 

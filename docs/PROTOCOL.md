@@ -80,11 +80,19 @@ Replay begins after `since`; live events follow. Event payloads:
 {"method":"heap.query","params":{"session":"s1","id":12}}
 {"method":"heap.query","params":{"session":"s1","live":true,"limit":100}}
 {"method":"heap.analyze","params":{"session":"s1"}}
+{"method":"heap.predict","params":{"session":"s1","tid":7,"size":24,"limit":16}}
 {"method":"heap.snapshot","params":{"session":"s1"}}
 ```
 
 `heap.query` and `heap.snapshot` include an `analysis` object with size-class
 histograms, largest live/freed chunks, address gaps and address-reuse counts.
+
+`heap.predict` returns likely next allocation addresses for a requested size.
+It models glibc `request2size`, per-thread tcache LIFO (7 chunks), fastbin
+LIFO for chunk sizes up to `0x80`, and smallbin FIFO above that. `tid: 0`
+merges free sequences across threads. Candidates include source and
+confidence (`tcache-lifo`/high, `fastbin-lifo`/medium,
+`smallbin-fifo`/medium, `free-order`/low).
 
 ## Memory and registers
 

@@ -126,6 +126,8 @@ Allocation {
   controlled-RIP candidate flag).
 - Heap analysis: size-class histogram, largest live/freed chunks, address
   gaps and address reuse.
+- Allocation prediction: glibc request2size, per-thread tcache LIFO,
+  fastbin LIFO and smallbin FIFO candidate ordering.
 - D7 allocator metadata anomalies (later).
 
 ### Sink and ROP validation

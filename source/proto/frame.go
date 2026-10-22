@@ -29,6 +29,7 @@ const (
 	MethodHeapQuery       = "heap.query"
 	MethodHeapSnapshot    = "heap.snapshot"
 	MethodHeapAnalyze     = "heap.analyze"
+	MethodHeapPredict     = "heap.predict"
 	MethodMemRead         = "mem.read"
 	MethodMemWrite        = "mem.write"
 	MethodRegsGet         = "regs.get"
