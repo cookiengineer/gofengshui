@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"gofengshui/source/core"
+	"gofengshui/core"
 )
 
 func BenchmarkApplyAllocFree(b *testing.B) {

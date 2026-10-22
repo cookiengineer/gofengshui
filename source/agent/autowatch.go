@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"gofengshui/source/core"
-	"gofengshui/source/debugger"
+	"gofengshui/core"
+	"gofengshui/debugger"
 )
 
 func (s *Session) watchCtl() WatchController {

@@ -3,7 +3,7 @@ package heap
 import (
 	"testing"
 
-	"gofengshui/source/core"
+	"gofengshui/core"
 )
 
 func fillArena(t *testing.T, m *Model, tid uint32, base uint64, startTS int64) {

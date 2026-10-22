@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"gofengshui/source/symbols"
+	"gofengshui/symbols"
 )
 
 // TestROPHardwareTrace exercises the same hardware-breakpoint/single-step

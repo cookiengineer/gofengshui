@@ -6,11 +6,11 @@ import (
 	"strings"
 	"time"
 
-	"gofengshui/source/core"
-	"gofengshui/source/debugger"
-	"gofengshui/source/disasm"
-	"gofengshui/source/proto"
-	"gofengshui/source/transport"
+	"gofengshui/core"
+	"gofengshui/debugger"
+	"gofengshui/disasm"
+	"gofengshui/proto"
+	"gofengshui/transport"
 )
 
 // SinkInfo is a registered sink function.

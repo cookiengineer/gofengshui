@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"gofengshui/source/proto"
+	"gofengshui/proto"
 )
 
 type helloHandler struct{}

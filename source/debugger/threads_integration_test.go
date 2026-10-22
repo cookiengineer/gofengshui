@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"gofengshui/source/symbols"
+	"gofengshui/symbols"
 )
 
 func TestMultiThreadCloneAndPause(t *testing.T) {

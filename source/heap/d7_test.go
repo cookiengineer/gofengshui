@@ -3,7 +3,7 @@ package heap
 import (
 	"testing"
 
-	"gofengshui/source/core"
+	"gofengshui/core"
 )
 
 func mustProfile(t *testing.T, version string) Profile {

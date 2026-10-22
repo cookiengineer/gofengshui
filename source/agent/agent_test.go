@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"gofengshui/source/core"
-	"gofengshui/source/debugger"
-	"gofengshui/source/heap"
-	"gofengshui/source/proto"
-	"gofengshui/source/transport"
+	"gofengshui/core"
+	"gofengshui/debugger"
+	"gofengshui/heap"
+	"gofengshui/proto"
+	"gofengshui/transport"
 )
 
 func TestHello(t *testing.T) {

@@ -3,7 +3,7 @@ package heap
 import (
 	"testing"
 
-	"gofengshui/source/core"
+	"gofengshui/core"
 )
 
 func TestBaselineDiff(t *testing.T) {

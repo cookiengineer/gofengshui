@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sort"
 
-	"gofengshui/source/core"
+	"gofengshui/core"
 )
 
 // RecipeStep is one suggested allocator action.

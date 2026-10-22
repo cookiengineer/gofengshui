@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"sync"
 
-	"gofengshui/source/core"
-	"gofengshui/source/heap"
+	"gofengshui/core"
+	"gofengshui/heap"
 )
 
 // Engine folds events into the heap model and deduplicates findings.

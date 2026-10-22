@@ -3,7 +3,7 @@ package heap
 import (
 	"sort"
 
-	"gofengshui/source/core"
+	"gofengshui/core"
 )
 
 // SizeClass summarizes allocations with the same chunk size.

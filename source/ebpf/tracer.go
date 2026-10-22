@@ -15,7 +15,7 @@ import (
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
 
-	"gofengshui/source/core"
+	"gofengshui/core"
 )
 
 const (

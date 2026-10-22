@@ -9,7 +9,7 @@ import (
 
 	"github.com/cilium/ebpf"
 
-	"gofengshui/source/core"
+	"gofengshui/core"
 )
 
 func TestEmbeddedObjectParses(t *testing.T) {

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"gofengshui/source/core"
+	"gofengshui/core"
 )
 
 func TestAutoWatchFreedChunk(t *testing.T) {

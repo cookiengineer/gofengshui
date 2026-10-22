@@ -16,12 +16,12 @@ import (
 	"syscall"
 	"time"
 
-	"gofengshui/source/agent"
-	"gofengshui/source/core"
-	"gofengshui/source/debugger"
-	"gofengshui/source/detect"
-	"gofengshui/source/proto"
-	"gofengshui/source/transport"
+	"gofengshui/agent"
+	"gofengshui/core"
+	"gofengshui/debugger"
+	"gofengshui/detect"
+	"gofengshui/proto"
+	"gofengshui/transport"
 )
 
 var (

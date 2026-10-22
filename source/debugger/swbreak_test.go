@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"gofengshui/source/symbols"
+	"gofengshui/symbols"
 )
 
 func TestSoftwareBreakpointTrigger(t *testing.T) {

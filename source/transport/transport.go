@@ -9,7 +9,7 @@ import (
 	"os"
 	"sync"
 
-	"gofengshui/source/proto"
+	"gofengshui/proto"
 )
 
 // Conn is a framed protocol connection.

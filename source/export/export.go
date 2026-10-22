@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"gofengshui/source/core"
-	"gofengshui/source/heap"
-	"gofengshui/source/proto"
+	"gofengshui/core"
+	"gofengshui/heap"
+	"gofengshui/proto"
 )
 
 // JSON writes an indented JSON document.

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sort"
 
-	"gofengshui/source/core"
+	"gofengshui/core"
 )
 
 const (

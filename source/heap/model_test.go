@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"gofengshui/source/core"
+	"gofengshui/core"
 )
 
 func ev(t core.EventType, addr, size, req uint64) core.Event {

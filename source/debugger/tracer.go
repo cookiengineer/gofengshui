@@ -16,7 +16,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"gofengshui/source/core"
+	"gofengshui/core"
 )
 
 const (

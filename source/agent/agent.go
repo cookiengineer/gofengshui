@@ -12,13 +12,13 @@ import (
 	"sync"
 	"time"
 
-	"gofengshui/source/core"
-	"gofengshui/source/debugger"
-	"gofengshui/source/ebpf"
-	"gofengshui/source/heap"
-	"gofengshui/source/proto"
-	"gofengshui/source/symbols"
-	"gofengshui/source/transport"
+	"gofengshui/core"
+	"gofengshui/debugger"
+	"gofengshui/ebpf"
+	"gofengshui/heap"
+	"gofengshui/proto"
+	"gofengshui/symbols"
+	"gofengshui/transport"
 )
 
 // Agent manages protocol sessions.

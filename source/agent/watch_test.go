@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"gofengshui/source/core"
-	"gofengshui/source/debugger"
+	"gofengshui/core"
+	"gofengshui/debugger"
 )
 
 func TestWatchAllocationByIDLive(t *testing.T) {

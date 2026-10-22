@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"time"
 
-	"gofengshui/source/core"
+	"gofengshui/core"
 )
 
 // MemoryReader reads target memory at addr.

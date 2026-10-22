@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"gofengshui/source/cli"
+	"gofengshui/cli"
 )
 
 func main() {

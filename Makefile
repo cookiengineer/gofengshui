@@ -12,9 +12,9 @@ VERSION   ?= 0.1.0
 COMMIT    ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS   := -s -w \
-             -X gofengshui/source/cli.Version=$(VERSION) \
-             -X gofengshui/source/cli.Commit=$(COMMIT) \
-             -X gofengshui/source/cli.BuildDate=$(BUILD_DATE)
+             -X gofengshui/cli.Version=$(VERSION) \
+             -X gofengshui/cli.Commit=$(COMMIT) \
+             -X gofengshui/cli.BuildDate=$(BUILD_DATE)
 DIST_NAME := gofengshui-$(VERSION)-linux-x86_64
 DIST_DIR  := $(BUILD_DIR)/dist/$(DIST_NAME)
 
@@ -53,7 +53,7 @@ all: build
 
 build: generate
 	@mkdir -p $(BUILD_DIR)
-	CGO_ENABLED=0 $(GO) build $(GOFLAGS) -trimpath -ldflags '$(LDFLAGS)' -o $(BIN) ./source/cmd/gofengshui
+	CGO_ENABLED=0 $(GO) -C source build $(GOFLAGS) -trimpath -ldflags '$(LDFLAGS)' -o ../$(BIN) ./cmd/gofengshui
 
 generate: $(BPF_GEN)
 
@@ -64,14 +64,14 @@ $(BPF_OBJ): $(BPF_DIR)/gofengshui.bpf.c $(BPF_DIR)/gofengshui.h $(BPF_DIR)/vmlin
 	$(CLANG) $(BPF_CFLAGS) -c $< -o $@
 
 $(BPF_GEN): $(BPF_OBJ) source/tools/bpfgen/main.go
-	$(GO) run ./source/tools/bpfgen -in $(BPF_OBJ) -out $@ -pkg ebpf -var bpfObject
+	$(GO) -C source run ./tools/bpfgen -in ../$(BPF_OBJ) -out ebpf/object_generated.go -pkg ebpf -var bpfObject
 	gofmt -w $@
 
 test: generate
-	$(GO) test ./source/...
+	$(GO) -C source test ./...
 
 bench: generate
-	$(GO) test -run '^$$' -bench . -benchmem ./source/heap
+	$(GO) -C source test -run '^$$' -bench . -benchmem ./heap
 
 dist: build
 	rm -rf $(DIST_DIR)
@@ -104,4 +104,4 @@ fmt:
 	gofmt -w $$(find source -name '*.go' ! -name 'object_generated.go')
 
 vet: generate
-	$(GO) vet ./source/...
+	$(GO) -C source vet ./...

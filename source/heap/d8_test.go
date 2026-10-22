@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"gofengshui/source/core"
+	"gofengshui/core"
 )
 
 func freeMetaEvent(addr, rawSize, nextSize uint64, flags uint32) core.Event {
