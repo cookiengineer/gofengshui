@@ -258,6 +258,7 @@ Implemented and locally tested:
   hardware break/watchpoint installation
 - sink registration, hijack watch, ROP single-step tracing source,
   gadget classification and report export
+- multi-thread clone hooks, per-thread allocator probes, and stop-the-world
 - CLI `run`, `attach`, `validate`, `agent`, `stdio`, `ctl`
 - `--no-ebpf` diagnostic mode for ptrace-only validation
 

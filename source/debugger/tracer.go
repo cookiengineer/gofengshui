@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -85,6 +86,7 @@ type Stop struct {
 type threadState struct {
 	tid          int
 	stopped      bool
+	options      bool
 	pendingSW    *Breakpoint
 	stepReinsert bool
 	stepping     bool
@@ -111,6 +113,7 @@ type Tracer struct {
 	watchpoints map[uint64]*Watchpoint
 	hw          [4]*hwSlot
 	nextID      uint64
+	threadHooks []func(int)
 
 	stops chan Stop
 	errs  chan error
@@ -177,7 +180,6 @@ func (t *Tracer) runLaunch(opts LaunchOptions) {
 		t.ready <- fmt.Errorf("start target: %w", err)
 		return
 	}
-	_ = unix.PtraceSetOptions(cmd.Process.Pid, ptraceOptions(opts.Follow))
 	t.mu.Lock()
 	t.cmd = cmd
 	t.pid = cmd.Process.Pid
@@ -199,23 +201,56 @@ func Attach(pid int, follow bool) (*Tracer, error) {
 
 func (t *Tracer) runAttach(pid int) {
 	runtime.LockOSThread()
-	if err := unix.PtraceSeize(pid); err != nil {
-		t.ready <- fmt.Errorf("ptrace seize %d: %w", pid, err)
-		return
+	tids := listTasks(pid)
+	if len(tids) == 0 {
+		tids = []int{pid}
 	}
-	_ = unix.PtraceSetOptions(pid, ptraceOptions(t.follow))
-	if err := unix.PtraceInterrupt(pid); err != nil {
-		_ = unix.PtraceDetach(pid)
-		t.ready <- fmt.Errorf("ptrace interrupt %d: %w", pid, err)
-		return
+	var seized []int
+	for _, tid := range tids {
+		if err := unix.PtraceSeize(tid); err != nil {
+			if tid == pid {
+				for _, id := range seized {
+					_ = unix.PtraceDetach(id)
+				}
+				t.ready <- fmt.Errorf("ptrace seize %d: %w", pid, err)
+				return
+			}
+			continue
+		}
+		seized = append(seized, tid)
+		_ = unix.PtraceSetOptions(tid, ptraceOptions(t.follow))
+		if err := unix.PtraceInterrupt(tid); err != nil && tid == pid {
+			for _, id := range seized {
+				_ = unix.PtraceDetach(id)
+			}
+			t.ready <- fmt.Errorf("ptrace interrupt %d: %w", pid, err)
+			return
+		}
+		t.mu.Lock()
+		t.tids[tid] = &threadState{tid: tid}
+		t.mu.Unlock()
 	}
 	t.mu.Lock()
 	t.pid = pid
 	t.attached = true
-	t.tids[pid] = &threadState{tid: pid}
 	t.mu.Unlock()
 	t.ready <- nil
 	t.loop()
+}
+
+func listTasks(pid int) []int {
+	entries, err := os.ReadDir(fmt.Sprintf("/proc/%d/task", pid))
+	if err != nil {
+		return nil
+	}
+	out := make([]int, 0, len(entries))
+	for _, e := range entries {
+		tid, err := strconv.Atoi(e.Name())
+		if err == nil {
+			out = append(out, tid)
+		}
+	}
+	return out
 }
 
 // PID returns the initial process ID.
@@ -271,35 +306,43 @@ func (t *Tracer) loop() {
 }
 
 func (t *Tracer) poll() {
-	for {
-		var ws unix.WaitStatus
-		tid, err := unix.Wait4(t.pid, &ws, unix.WNOHANG|unix.WALL, nil)
-		if err != nil {
-			if errors.Is(err, unix.EINTR) {
+	t.mu.Lock()
+	tids := make([]int, 0, len(t.tids))
+	for id := range t.tids {
+		tids = append(tids, id)
+	}
+	t.mu.Unlock()
+	for _, tid := range tids {
+		for {
+			var ws unix.WaitStatus
+			wpid, err := unix.Wait4(tid, &ws, unix.WNOHANG|unix.WALL, nil)
+			if err != nil {
+				if errors.Is(err, unix.EINTR) {
+					continue
+				}
+				if errors.Is(err, unix.ECHILD) {
+					break
+				}
+				select {
+				case t.errs <- err:
+				default:
+				}
+				break
+			}
+			if wpid <= 0 {
+				break
+			}
+			if ws.Exited() {
+				t.handleExit(wpid, ws.ExitStatus())
 				continue
 			}
-			if errors.Is(err, unix.ECHILD) {
-				return
+			if ws.Signaled() {
+				t.handleExit(wpid, -int(ws.Signal()))
+				continue
 			}
-			select {
-			case t.errs <- err:
-			default:
+			if ws.Stopped() {
+				t.handleStop(wpid, ws)
 			}
-			return
-		}
-		if tid <= 0 {
-			return
-		}
-		if ws.Exited() {
-			t.handleExit(tid, ws.ExitStatus())
-			continue
-		}
-		if ws.Signaled() {
-			t.handleExit(tid, -int(ws.Signal()))
-			continue
-		}
-		if ws.Stopped() {
-			t.handleStop(tid, ws)
 		}
 	}
 }
@@ -318,22 +361,33 @@ func (t *Tracer) handleExit(tid, code int) {
 }
 
 func (t *Tracer) handleStop(tid int, ws unix.WaitStatus) {
+	t.ensureOptions(tid)
 	sig := int(ws.StopSignal())
 	event := int(ws.TrapCause())
+	if os.Getenv("GFS_PTRACE_LOG") != "" {
+		fmt.Fprintf(os.Stderr, "gfs: stop tid=%d sig=%d event=%d\n", tid, sig, event)
+	}
 
 	if sig == int(unix.SIGTRAP) && event != 0 {
 		switch event {
 		case int(unix.PTRACE_EVENT_CLONE), int(unix.PTRACE_EVENT_FORK), int(unix.PTRACE_EVENT_VFORK):
 			msg, err := unix.PtraceGetEventMsg(tid)
+			if os.Getenv("GFS_PTRACE_LOG") != "" {
+				fmt.Fprintf(os.Stderr, "gfs: clone event tid=%d new=%d err=%v\n", tid, msg, err)
+			}
 			if err == nil {
 				newTid := int(msg)
 				t.mu.Lock()
-				t.tids[newTid] = &threadState{tid: newTid}
+				t.tids[newTid] = &threadState{tid: newTid, options: true}
 				t.mu.Unlock()
 				_ = unix.PtraceSetOptions(newTid, ptraceOptions(t.follow))
 				t.applyHardware(newTid)
-				if !t.follow {
-					_ = unix.PtraceCont(newTid, 0)
+				t.runThreadHooks(newTid)
+				// A clone event leaves the new task in a ptrace stop. It must
+				// be continued explicitly or the parent blocks forever.
+				err := unix.PtraceCont(newTid, 0)
+				if os.Getenv("GFS_PTRACE_LOG") != "" {
+					fmt.Fprintf(os.Stderr, "gfs: continue new tid=%d err=%v\n", newTid, err)
 				}
 			}
 		case int(unix.PTRACE_EVENT_EXEC):
@@ -396,6 +450,18 @@ func (t *Tracer) handleStop(tid int, ws unix.WaitStatus) {
 		return
 	}
 
+	if sig == int(unix.SIGSTOP) || sig == int(unix.SIGTSTP) ||
+		sig == int(unix.SIGTTIN) || sig == int(unix.SIGTTOU) {
+		t.mu.Lock()
+		if ts := t.tids[tid]; ts != nil {
+			ts.stopped = true
+		}
+		t.mu.Unlock()
+		regs, _ := t.registersLocked(tid)
+		t.emit(Stop{TID: tid, PID: t.pid, Reason: "stopped", Signal: sig, Regs: regs, Timestamp: time.Now()})
+		return
+	}
+
 	t.mu.Lock()
 	if ts := t.tids[tid]; ts != nil {
 		ts.stopped = true
@@ -416,10 +482,25 @@ func (t *Tracer) handleStop(tid int, ws unix.WaitStatus) {
 	}
 }
 
+func (t *Tracer) ensureOptions(tid int) {
+	t.mu.Lock()
+	ts := t.tids[tid]
+	if ts != nil && ts.options {
+		t.mu.Unlock()
+		return
+	}
+	if ts != nil {
+		ts.options = true
+	}
+	t.mu.Unlock()
+	_ = unix.PtraceSetOptions(tid, ptraceOptions(t.follow))
+}
+
 func ptraceOptions(follow bool) int {
-	opts := unix.PTRACE_O_EXITKILL | unix.PTRACE_O_TRACEEXEC
+	// Clone tracing is always enabled so new threads are instrumented.
+	opts := unix.PTRACE_O_EXITKILL | unix.PTRACE_O_TRACEEXEC | unix.PTRACE_O_TRACECLONE
 	if follow {
-		opts |= unix.PTRACE_O_TRACECLONE | unix.PTRACE_O_TRACEFORK | unix.PTRACE_O_TRACEVFORK
+		opts |= unix.PTRACE_O_TRACEFORK | unix.PTRACE_O_TRACEVFORK
 	}
 	return opts
 }
@@ -481,6 +562,21 @@ func (t *Tracer) classifyTrap(tid int) (*Breakpoint, *Watchpoint) {
 	return nil, nil
 }
 
+// AllStopped reports whether every known thread is in a ptrace stop.
+func (t *Tracer) AllStopped() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.tids) == 0 {
+		return false
+	}
+	for _, ts := range t.tids {
+		if ts == nil || !ts.stopped {
+			return false
+		}
+	}
+	return true
+}
+
 // Continue resumes one thread or all threads if tid is zero.
 func (t *Tracer) Continue(tid int) error {
 	return t.do(func() error {
@@ -519,18 +615,141 @@ func (t *Tracer) Continue(tid int) error {
 	})
 }
 
-// Pause interrupts all known threads.
+// AddThreadHook registers a callback invoked for each newly cloned thread
+// while that thread is still stopped at the clone event.
+func (t *Tracer) AddThreadHook(fn func(int)) {
+	if fn == nil {
+		return
+	}
+	t.mu.Lock()
+	t.threadHooks = append(t.threadHooks, fn)
+	t.mu.Unlock()
+}
+
+func (t *Tracer) runThreadHooks(tid int) {
+	t.mu.Lock()
+	hooks := append([]func(int){}, t.threadHooks...)
+	t.mu.Unlock()
+	for _, fn := range hooks {
+		fn(tid)
+	}
+}
+
+// Pause stops all known threads. Seized tracees use PTRACE_INTERRUPT;
+// TRACEME-spawned tracees use a process-wide SIGSTOP group stop.
 func (t *Tracer) Pause() error {
 	return t.do(func() error {
+		if t.AllStopped() {
+			return nil
+		}
 		t.mu.Lock()
+		attached := t.attached
+		pid := t.pid
 		tids := make([]int, 0, len(t.tids))
 		for id := range t.tids {
 			tids = append(tids, id)
 		}
 		t.mu.Unlock()
+		if !attached {
+			var errs []error
+			for _, id := range tids {
+				if err := unix.Tgkill(pid, id, unix.SIGSTOP); err != nil {
+					errs = append(errs, err)
+				}
+			}
+			return errors.Join(errs...)
+		}
 		var errs []error
 		for _, id := range tids {
 			if err := unix.PtraceInterrupt(id); err != nil && !errors.Is(err, unix.EIO) {
+				errs = append(errs, err)
+			}
+		}
+		return errors.Join(errs...)
+	})
+}
+
+// PauseOthers interrupts every known thread except keep.
+func (t *Tracer) PauseOthers(keep int) error {
+	return t.do(func() error {
+		t.mu.Lock()
+		attached := t.attached
+		pid := t.pid
+		tids := make([]int, 0, len(t.tids))
+		for id := range t.tids {
+			if id != keep {
+				tids = append(tids, id)
+			}
+		}
+		t.mu.Unlock()
+		if os.Getenv("GFS_PTRACE_LOG") != "" {
+			fmt.Fprintf(os.Stderr, "gfs: PauseOthers keep=%d tids=%v attached=%v\n", keep, tids, attached)
+		}
+		var errs []error
+		for _, id := range tids {
+			var err error
+			if attached {
+				err = unix.PtraceInterrupt(id)
+				if errors.Is(err, unix.EIO) {
+					err = nil
+				}
+			} else {
+				err = unix.Tgkill(pid, id, unix.SIGSTOP)
+			}
+			if err != nil {
+				errs = append(errs, err)
+			}
+		}
+		return errors.Join(errs...)
+	})
+}
+
+// WaitStoppedExcept waits until every thread except keep is stopped.
+func (t *Tracer) WaitStoppedExcept(keep int, timeout time.Duration) bool {
+	if timeout <= 0 {
+		timeout = 2 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if t.AllStoppedExcept(keep) {
+			return true
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	return false
+}
+
+// AllStoppedExcept reports whether every known thread except keep is stopped.
+func (t *Tracer) AllStoppedExcept(keep int) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	found := false
+	for id, ts := range t.tids {
+		if id == keep {
+			continue
+		}
+		found = true
+		if ts == nil || !ts.stopped {
+			return false
+		}
+	}
+	return found
+}
+
+// ContinueOthers resumes every known thread except keep.
+func (t *Tracer) ContinueOthers(keep int) error {
+	return t.do(func() error {
+		t.mu.Lock()
+		tids := make([]int, 0, len(t.tids))
+		for id := range t.tids {
+			if id != keep {
+				tids = append(tids, id)
+			}
+		}
+		t.mu.Unlock()
+		var errs []error
+		for _, id := range tids {
+			if err := unix.PtraceCont(id, 0); err != nil && !errors.Is(err, unix.ESRCH) {
 				errs = append(errs, err)
 			}
 		}

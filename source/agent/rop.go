@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -353,6 +354,7 @@ func (s *Session) hijackStop(st debugger.Stop) {
 			return
 		}
 		_ = s.tracer.ClearWatchpoint(h.WatchID)
+		_ = s.tracer.PauseOthers(st.TID)
 		state := &ROPState{
 			SinkAddr: h.SinkAddr, Start: value, ChainBase: h.ChainBase,
 			ChainLen: h.ChainLen, MaxSteps: h.MaxSteps, TID: st.TID,
@@ -372,6 +374,7 @@ func (s *Session) hijackStop(st debugger.Stop) {
 		Started: time.Now(), Tracing: true,
 	}
 	_ = s.tracer.ClearWatchpoint(h.WatchID)
+	_ = s.tracer.PauseOthers(st.TID)
 	s.mu.Lock()
 	s.hijack = nil
 	s.rop = state
@@ -401,6 +404,10 @@ func (s *Session) ropStop(st debugger.Stop) {
 	if rop == nil {
 		return
 	}
+	if os.Getenv("GFS_PTRACE_LOG") != "" {
+		fmt.Fprintf(os.Stderr, "gfs-rop: stop reason=%s tid=%d rip=0x%x addr=0x%x tracing=%v steps=%d\n",
+			st.Reason, st.TID, st.Regs.RIP, st.Address, rop.Tracing, len(rop.Steps))
+	}
 
 	if st.Reason == "signal" || st.Reason == "exit" {
 		s.finishROP(rop, st, fmt.Sprintf("stopped before sink: %s signal=%d", st.Reason, st.Signal))
@@ -415,6 +422,7 @@ func (s *Session) ropStop(st debugger.Stop) {
 				_ = s.tracer.ClearBreakpoint(rop.Start)
 				rop.StartBP = 0
 			}
+			_ = s.tracer.PauseOthers(st.TID)
 			s.recordStep(rop, st)
 			_ = s.tracer.SingleStep(st.TID)
 		}
@@ -448,6 +456,9 @@ func (s *Session) recordStep(rop *ROPState, st debugger.Stop) {
 }
 
 func (s *Session) finishROP(rop *ROPState, st debugger.Stop, reason string) {
+	if os.Getenv("GFS_PTRACE_LOG") != "" {
+		fmt.Fprintf(os.Stderr, "gfs-rop: finish reason=%q rip=0x%x steps=%d\n", reason, st.Regs.RIP, len(rop.Steps))
+	}
 	sink := s.captureSink(st)
 	var chain []disasm.ChainEntry
 	if rop.ChainBase != 0 {

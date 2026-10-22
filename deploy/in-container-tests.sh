@@ -22,6 +22,7 @@ timeout 30s gofengshui run --report /reports/double_free \
   -- /opt/gfs/testdata/double_free \
   > /reports/double_free.events.jsonl
 grep -q '"id":"D1"' /reports/double_free.events.jsonl
+grep -q '\*\*D1\*\*' /reports/double_free/report.md
 echo "D1 double-free finding observed"
 
 echo "== uaf =="
@@ -31,6 +32,7 @@ timeout 30s gofengshui run --report /reports/uaf \
   -- /opt/gfs/testdata/uaf \
   > /reports/uaf.events.jsonl
 grep -q '"id":"D2"' /reports/uaf.events.jsonl
+grep -q 'use-after-free' /reports/uaf/report.md
 echo "D2 UAF finding observed"
 
 echo "== overflow =="
@@ -40,6 +42,7 @@ timeout 30s gofengshui run --report /reports/overflow \
   -- /opt/gfs/testdata/overflow \
   > /reports/overflow.events.jsonl
 grep -q '"id":"D3"' /reports/overflow.events.jsonl
+grep -q 'heap overflow' /reports/overflow/report.md
 echo "D3 overflow finding observed"
 
 echo "== allocation failure / OOM =="
@@ -49,7 +52,10 @@ timeout 30s gofengshui run --report /reports/alloc_fail \
   -- /opt/gfs/testdata/alloc_fail \
   > /reports/alloc_fail.events.jsonl
 grep -q '"id":"D4"' /reports/alloc_fail.events.jsonl
-echo "D4 allocation-failure finding observed"
+grep -q 'allocation failed: request=18446744073709551615' /reports/alloc_fail.events.jsonl
+grep -q 'mmap/mremap failed: errno=' /reports/alloc_fail/report.md
+grep -q '\*\*D4\*\*' /reports/alloc_fail/report.md
+echo "D4 allocation-failure finding observed (malloc NULL + mmap ENOMEM)"
 
 echo "== crash classification =="
 timeout 30s gofengshui run --report /reports/crash \
@@ -58,7 +64,40 @@ timeout 30s gofengshui run --report /reports/crash \
   -- /opt/gfs/testdata/crash \
   > /reports/crash.events.jsonl
 grep -q '"id":"D6"' /reports/crash.events.jsonl
-echo "D6 crash finding observed"
+grep -q 'signal 11 at RIP' /reports/crash.events.jsonl
+grep -q '\*\*D6\*\*' /reports/crash/report.md
+echo "D6 crash finding observed (SIGSEGV with symbolized RIP)"
+
+echo "== clean allocation loop (no false positives) =="
+timeout 30s gofengshui run --report /reports/clean \
+  --stdout /reports/clean.stdout \
+  --stderr /reports/clean.stderr \
+  -- /opt/gfs/testdata/alloc_loop \
+  > /reports/clean.events.jsonl
+if grep -q '"kind":"finding"' /reports/clean.events.jsonl; then
+  echo "unexpected finding on clean allocation loop" >&2
+  grep '"kind":"finding"' /reports/clean.events.jsonl >&2 || true
+  exit 1
+fi
+grep -q 'No findings recorded' /reports/clean/report.md
+grep -q '"analysis"' /reports/clean/heap.json
+grep -q '"size_classes"' /reports/clean/heap.json
+echo "no false-positive findings on clean malloc/free loop; heap analysis exported"
+
+echo "== multithread allocation =="
+timeout 30s gofengshui run --follow --report /reports/threads \
+  --stdout /reports/threads.stdout \
+  --stderr /reports/threads.stderr \
+  -- /opt/gfs/testdata/threads \
+  > /reports/threads.events.jsonl
+THREAD_TIDS=$(grep -E '"type":1([,}])' /reports/threads.events.jsonl \
+  | grep -o '"tid":[0-9]*' | sort -u | wc -l)
+if [ "$THREAD_TIDS" -lt 2 ]; then
+  echo "expected allocator events from multiple threads, got $THREAD_TIDS" >&2
+  exit 1
+fi
+grep -q '"analysis"' /reports/threads/heap.json
+echo "allocator events observed from $THREAD_TIDS threads; analysis exported"
 
 echo "== rop sink =="
 timeout 30s gofengshui validate --report /reports/rop \

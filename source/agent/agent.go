@@ -186,6 +186,7 @@ func (a *Agent) createSession(p CreateParams, cfg core.Config) (*Session, error)
 		stops:   make(chan debugger.Stop, 256),
 		done:    make(chan struct{}),
 		subs:    make(map[uint64]*subscriber),
+		ropDone: make(chan *ROPResult, 8),
 		started: time.Now(),
 	}
 	s.engine = detectEngine(s.model)
@@ -288,6 +289,9 @@ func (a *Agent) createSession(p CreateParams, cfg core.Config) (*Session, error)
 		return nil, fmt.Errorf("attach ebpf: %w", err)
 	}
 	s.bpf = tracer
+	s.tracer.AddThreadHook(func(tid int) {
+		_ = tracer.AttachThread(tid)
+	})
 	return s, nil
 }
 

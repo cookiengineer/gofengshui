@@ -21,6 +21,7 @@ const (
 	EventSyscallRet  EventType = 10
 	EventAllocFail   EventType = 11
 	EventStat        EventType = 12
+	EventCrash       EventType = 100
 )
 
 func (t EventType) String() string {
@@ -49,6 +50,8 @@ func (t EventType) String() string {
 		return "alloc_fail"
 	case EventStat:
 		return "stat"
+	case EventCrash:
+		return "crash"
 	default:
 		return fmt.Sprintf("event_%d", uint32(t))
 	}

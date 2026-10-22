@@ -77,7 +77,7 @@ Flags for run/attach:
   --pid N            attach to N instead of spawning
   --pause            stop at the first controlled point
   --jsonl            serve the JSONL protocol on stdin/stdout
-  --follow           follow clone/fork/vfork
+  --follow           follow fork/vfork (threads are always traced)
   --report DIR       export a report when the target exits
   --stdout PATH      target stdout file
   --stderr PATH      target stderr file

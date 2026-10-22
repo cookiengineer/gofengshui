@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -89,8 +90,12 @@ type bpfStats struct {
 type Tracer struct {
 	mu sync.RWMutex
 
-	coll  *ebpf.Collection
-	links []link.Link
+	coll        *ebpf.Collection
+	links       []link.Link
+	libcPath    string
+	ex          *link.Executable
+	attachedTID map[int]bool
+	closed      bool
 
 	events     *ebpf.Map
 	allocs     *ebpf.Map
@@ -132,18 +137,19 @@ func New(cfg core.Config, target core.Target) (*Tracer, error) {
 	}
 
 	t := &Tracer{
-		coll:       coll,
-		events:     coll.Maps["events"],
-		allocs:     coll.Maps["allocs"],
-		tombstones: coll.Maps["tombstones"],
-		stacks:     coll.Maps["stacks"],
-		statsMap:   coll.Maps["stats"],
-		configMap:  coll.Maps["config"],
-		out:        make(chan core.Event, 4096),
-		errs:       make(chan error, 16),
-		done:       make(chan struct{}),
-		target:     target,
-		cfg:        cfg,
+		coll:        coll,
+		events:      coll.Maps["events"],
+		allocs:      coll.Maps["allocs"],
+		tombstones:  coll.Maps["tombstones"],
+		stacks:      coll.Maps["stacks"],
+		statsMap:    coll.Maps["stats"],
+		configMap:   coll.Maps["config"],
+		out:         make(chan core.Event, 4096),
+		errs:        make(chan error, 16),
+		attachedTID: make(map[int]bool),
+		done:        make(chan struct{}),
+		target:      target,
+		cfg:         cfg,
 	}
 	if t.events == nil || t.allocs == nil || t.tombstones == nil ||
 		t.stacks == nil || t.statsMap == nil || t.configMap == nil {
@@ -163,9 +169,31 @@ func (t *Tracer) Attach() error {
 		t.target.PID, t.target.InitPID, t.target.CgroupID, t.cfg.Flags(), t.target.LibcPath)
 
 	if !t.cfg.NoLibc && t.target.LibcPath != "" {
-		if err := t.attachAllocator(t.target.LibcPath); err != nil {
-			debugf("allocator attach: %v", err)
-			t.errs <- err
+		ex, err := link.OpenExecutable(t.target.LibcPath)
+		if err != nil {
+			debugf("open allocator: %v", err)
+			select {
+			case t.errs <- fmt.Errorf("open allocator: %w", err):
+			default:
+			}
+		} else {
+			t.mu.Lock()
+			t.ex = ex
+			t.libcPath = t.target.LibcPath
+			t.mu.Unlock()
+			var attachErrs []error
+			for _, tid := range taskIDs(t.target.PID) {
+				if err := t.attachThread(tid); err != nil {
+					debugf("attach thread %d: %v", tid, err)
+					attachErrs = append(attachErrs, err)
+				}
+			}
+			if len(attachErrs) > 0 {
+				select {
+				case t.errs <- errors.Join(attachErrs...):
+				default:
+				}
+			}
 		}
 	}
 
@@ -195,12 +223,24 @@ func (t *Tracer) Attach() error {
 	return nil
 }
 
-func (t *Tracer) attachAllocator(path string) error {
-	ex, err := link.OpenExecutable(path)
-	if err != nil {
-		return fmt.Errorf("open allocator ELF %s: %w", path, err)
+// AttachThread attaches allocator probes for one target thread. It is used
+// for threads created after the session started.
+func (t *Tracer) AttachThread(tid int) error {
+	return t.attachThread(tid)
+}
+
+func (t *Tracer) attachThread(tid int) error {
+	t.mu.Lock()
+	if t.closed || t.ex == nil || t.attachedTID[tid] {
+		t.mu.Unlock()
+		return nil
 	}
-	opts := &link.UprobeOptions{PID: t.target.PID}
+	t.attachedTID[tid] = true
+	ex := t.ex
+	path := t.libcPath
+	t.mu.Unlock()
+
+	opts := &link.UprobeOptions{PID: tid}
 	entries := []struct {
 		symbol string
 		prog   string
@@ -220,6 +260,7 @@ func (t *Tracer) attachAllocator(path string) error {
 	}
 
 	var attachErrs []error
+	var newLinks []link.Link
 	for _, h := range entries {
 		prog := t.coll.Programs[h.prog]
 		if prog == nil {
@@ -228,11 +269,11 @@ func (t *Tracer) attachAllocator(path string) error {
 		}
 		l, err := ex.Uprobe(h.symbol, prog, opts)
 		if err != nil {
-			attachErrs = append(attachErrs, fmt.Errorf("uprobe %s: %w", h.symbol, err))
+			attachErrs = append(attachErrs, fmt.Errorf("uprobe %s tid %d: %w", h.symbol, tid, err))
 			continue
 		}
-		debugf("uprobe %s -> %s", h.symbol, path)
-		t.links = append(t.links, l)
+		debugf("uprobe %s tid=%d -> %s", h.symbol, tid, path)
+		newLinks = append(newLinks, l)
 	}
 	for _, h := range returns {
 		prog := t.coll.Programs[h.prog]
@@ -242,13 +283,34 @@ func (t *Tracer) attachAllocator(path string) error {
 		}
 		l, err := ex.Uretprobe(h.symbol, prog, opts)
 		if err != nil {
-			attachErrs = append(attachErrs, fmt.Errorf("uretprobe %s: %w", h.symbol, err))
+			attachErrs = append(attachErrs, fmt.Errorf("uretprobe %s tid %d: %w", h.symbol, tid, err))
 			continue
 		}
-		debugf("uretprobe %s -> %s", h.symbol, path)
-		t.links = append(t.links, l)
+		debugf("uretprobe %s tid=%d -> %s", h.symbol, tid, path)
+		newLinks = append(newLinks, l)
 	}
+	t.mu.Lock()
+	t.links = append(t.links, newLinks...)
+	t.mu.Unlock()
 	return errors.Join(attachErrs...)
+}
+
+func taskIDs(pid int) []int {
+	entries, err := os.ReadDir(fmt.Sprintf("/proc/%d/task", pid))
+	if err != nil {
+		return []int{pid}
+	}
+	out := make([]int, 0, len(entries))
+	for _, e := range entries {
+		tid, err := strconv.Atoi(e.Name())
+		if err == nil {
+			out = append(out, tid)
+		}
+	}
+	if len(out) == 0 {
+		out = append(out, pid)
+	}
+	return out
 }
 
 func (t *Tracer) updateConfig() error {
@@ -394,11 +456,15 @@ func (t *Tracer) BPFStats() (bpfStats, error) {
 func (t *Tracer) Close() error {
 	var errs []error
 	t.once.Do(func() {
+		t.mu.Lock()
+		t.closed = true
+		links := append([]link.Link(nil), t.links...)
+		t.mu.Unlock()
 		close(t.done)
 		if t.reader != nil {
 			errs = append(errs, t.reader.Close())
 		}
-		for _, l := range t.links {
+		for _, l := range links {
 			errs = append(errs, l.Close())
 		}
 		if t.coll != nil {

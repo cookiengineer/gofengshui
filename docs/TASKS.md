@@ -64,9 +64,9 @@ Status legend: `yes`, `partial`, `no`. Updated incrementally during work.
 
 | # | Task | Implemented? | Tested? | Verified? |
 |---|---|---|---|---|
-| M3.1 | Full multi-thread debug-register inheritance | no | no | no |
-| M3.2 | Stop-the-world for all traced threads | partial | no | no |
-| M3.3 | fork/exec follow | partial | no | no |
+| M3.1 | Multi-thread tracing, clone hooks, per-thread debug registers | yes | yes | partial |
+| M3.2 | Stop-the-world for all traced threads | yes | yes | partial |
+| M3.3 | fork/exec follow | partial | yes | partial |
 | M3.4 | dlopen rescan / re-attach | no | no | no |
 | M3.5 | tcache / main_arena introspection | no | no | no |
 | M3.6 | Additional syscall coverage | partial | no | no |
@@ -75,7 +75,8 @@ Status legend: `yes`, `partial`, `no`. Updated incrementally during work.
 | M3.9 | musl backend | no | no | no |
 | M3.10 | Go runtime backend | no | no | no |
 | M3.11 | Docs and CI assertion DSL | yes | partial | no |
-| M3.12 | Heap-feng-shui analysis (size classes, gaps, reuse) | yes | yes | no |
+| M3.12 | Heap-feng-shui analysis (size classes, gaps, reuse) | yes | yes | yes |
+| M3.13 | Per-thread allocator uprobes for new threads | yes | partial | no |
 
 ## Privileged Integration Result (2026-10-22)
 

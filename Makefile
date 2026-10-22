@@ -18,7 +18,8 @@ TESTBINS := $(BUILD_DIR)/testdata/alloc_loop \
             $(BUILD_DIR)/testdata/overflow \
             $(BUILD_DIR)/testdata/rop_sink \
             $(BUILD_DIR)/testdata/alloc_fail \
-            $(BUILD_DIR)/testdata/crash
+            $(BUILD_DIR)/testdata/crash \
+            $(BUILD_DIR)/testdata/threads
 
 .PHONY: all build generate bpf test test-c clean fmt vet
 
@@ -47,7 +48,7 @@ test-c: $(TESTBINS)
 
 $(BUILD_DIR)/testdata/%: source/testdata/c/%.c source/testdata/c/gfs_harness.h
 	@mkdir -p $(dir $@)
-	$(CC) -g -O0 -fno-omit-frame-pointer -fno-stack-protector -no-pie -o $@ $<
+	$(CC) -g -O0 -fno-omit-frame-pointer -fno-stack-protector -no-pie -pthread -o $@ $<
 
 clean:
 	rm -rf $(BUILD_DIR) $(BPF_GEN)

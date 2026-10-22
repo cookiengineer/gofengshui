@@ -88,6 +88,14 @@ type Session struct {
 func detectEngine(m *heap.Model) *detect.Engine { return detect.New(m) }
 
 func (s *Session) start() {
+	s.mu.Lock()
+	if s.ropDone == nil {
+		s.ropDone = make(chan *ROPResult, 8)
+	}
+	if s.stops == nil {
+		s.stops = make(chan debugger.Stop, 256)
+	}
+	s.mu.Unlock()
 	go s.pump()
 }
 
@@ -193,7 +201,7 @@ func (s *Session) classifyCrash(st debugger.Stop) {
 	if controlled {
 		msg += " [non-executable/controlled RIP candidate]"
 	}
-	evCopy := core.Event{Timestamp: st.Timestamp, Type: core.EventStat, Addr: rip, PID: uint32(st.PID), TID: uint32(st.TID)}
+	evCopy := core.Event{Timestamp: st.Timestamp, Type: core.EventCrash, Addr: rip, PID: uint32(st.PID), TID: uint32(st.TID)}
 	f := core.Finding{
 		ID: "D6", Severity: sev, Message: msg, Event: &evCopy, Timestamp: st.Timestamp,
 		Details: map[string]any{
