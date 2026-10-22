@@ -31,8 +31,8 @@ Status legend: `yes`, `partial`, `no`. Updated incrementally during work.
 | M1.8 | D1 double/invalid free | yes | yes | yes |
 | M1.9 | D2 UAF syscall-buffer detection | yes | yes | yes |
 | M1.10 | D3 heap-overflow range detection | yes | yes | yes |
-| M1.11 | D4 OOM/allocation-failure detection | yes | no | no |
-| M1.12 | D6 crash classification | partial | no | no |
+| M1.11 | D4 OOM/allocation-failure detection | yes | partial | no |
+| M1.12 | D6 crash classification | yes | yes | no |
 | M1.13 | JSONL protocol framing and versioning | yes | yes | yes |
 | M1.14 | stdio transport | yes | yes | partial |
 | M1.15 | Unix-socket transport | yes | yes | yes |
@@ -75,6 +75,7 @@ Status legend: `yes`, `partial`, `no`. Updated incrementally during work.
 | M3.9 | musl backend | no | no | no |
 | M3.10 | Go runtime backend | no | no | no |
 | M3.11 | Docs and CI assertion DSL | yes | partial | no |
+| M3.12 | Heap-feng-shui analysis (size classes, gaps, reuse) | yes | yes | no |
 
 ## Privileged Integration Result (2026-10-22)
 

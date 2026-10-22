@@ -47,6 +47,7 @@ type Model struct {
 
 	allocs  map[uint64]*core.Allocation
 	byID    map[uint64]*core.Allocation
+	reuses  map[uint64]int
 	tombs   map[uint64]Tombstone
 	mmaps   map[uint64]Mmap
 	pending map[uint32]pendingMmap
@@ -58,6 +59,7 @@ func NewModel() *Model {
 	return &Model{
 		allocs:  make(map[uint64]*core.Allocation),
 		byID:    make(map[uint64]*core.Allocation),
+		reuses:  make(map[uint64]int),
 		tombs:   make(map[uint64]Tombstone),
 		mmaps:   make(map[uint64]Mmap),
 		pending: make(map[uint32]pendingMmap),
@@ -151,6 +153,7 @@ func (m *Model) applyAlloc(ev core.Event) {
 	}
 	m.allocs[a.Addr] = a
 	m.byID[a.ID] = a
+	m.reuses[a.Addr]++
 }
 
 func (m *Model) applyFree(ev core.Event, double bool) {
@@ -180,6 +183,15 @@ func (m *Model) applyMmapRet(ev core.Event) {
 	// Negative return values are errno; anything with the high bit set and
 	// within -4095..-1 is an error.
 	if ev.Addr > ^uint64(0)-4096 {
+		errCopy := ev
+		m.findings = append(m.findings, core.Finding{
+			ID:        "D4",
+			Severity:  "medium",
+			Message:   fmt.Sprintf("mmap/mremap failed: errno=%d", int64(-int64(ev.Addr))),
+			Event:     &errCopy,
+			Timestamp: ev.Timestamp,
+			Details:   map[string]any{"syscall": ev.Arg1, "ret": ev.Addr},
+		})
 		return
 	}
 	m.mmaps[ev.Addr] = Mmap{
@@ -396,6 +408,7 @@ func (m *Model) Reset() {
 	defer m.mu.Unlock()
 	m.allocs = make(map[uint64]*core.Allocation)
 	m.byID = make(map[uint64]*core.Allocation)
+	m.reuses = make(map[uint64]int)
 	m.tombs = make(map[uint64]Tombstone)
 	m.mmaps = make(map[uint64]Mmap)
 	m.pending = make(map[uint32]pendingMmap)

@@ -45,6 +45,16 @@ func (e *Engine) Observe(ev core.Event) []core.Finding {
 	return out
 }
 
+// Add records an externally classified finding (for example a ptrace crash).
+func (e *Engine) Add(f core.Finding) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.recent = append(e.recent, f)
+	if len(e.recent) > 4096 {
+		e.recent = e.recent[len(e.recent)-2048:]
+	}
+}
+
 func (e *Engine) Recent() []core.Finding {
 	e.mu.Lock()
 	defer e.mu.Unlock()

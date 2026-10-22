@@ -20,6 +20,8 @@ import (
 	"gofengshui/source/proto"
 	"gofengshui/source/symbols"
 	"gofengshui/source/transport"
+
+	"golang.org/x/sys/unix"
 )
 
 // StreamEvent is the payload of a protocol event frame.
@@ -145,6 +147,7 @@ func (s *Session) handleStop(st debugger.Stop) {
 	default:
 	}
 
+	s.classifyCrash(st)
 	s.hijackStop(st)
 	s.mu.Lock()
 	rop := s.rop
@@ -163,6 +166,45 @@ func (s *Session) handleStop(st debugger.Stop) {
 			s.broadcast("sink", StreamEvent{Kind: "sink", Sink: hit})
 		}
 	}
+}
+
+func (s *Session) classifyCrash(st debugger.Stop) {
+	if st.Reason != "signal" {
+		return
+	}
+	switch st.Signal {
+	case int(unix.SIGSEGV), int(unix.SIGBUS), int(unix.SIGILL),
+		int(unix.SIGFPE), int(unix.SIGABRT), int(unix.SIGSYS):
+	default:
+		return
+	}
+	rip := st.Regs.RIP
+	executable := s.executable(rip)
+	mod, sym, off, hasSym := s.symbolize(rip)
+	controlled := !executable || rip == 0
+	sev := "high"
+	if st.Signal == 6 {
+		sev = "medium" // abort, often allocator/assertion diagnostics
+	}
+	msg := fmt.Sprintf("signal %d at RIP 0x%x", st.Signal, rip)
+	if hasSym {
+		msg += fmt.Sprintf(" (%s+0x%x)", sym, off)
+	}
+	if controlled {
+		msg += " [non-executable/controlled RIP candidate]"
+	}
+	evCopy := core.Event{Timestamp: st.Timestamp, Type: core.EventStat, Addr: rip, PID: uint32(st.PID), TID: uint32(st.TID)}
+	f := core.Finding{
+		ID: "D6", Severity: sev, Message: msg, Event: &evCopy, Timestamp: st.Timestamp,
+		Details: map[string]any{
+			"signal": st.Signal, "rip": rip, "module": mod, "symbol": sym,
+			"offset": off, "executable": executable, "controlled_rip": controlled,
+			"stack_pointer": st.Regs.RSP,
+		},
+	}
+	s.engine.Add(f)
+	fc := f
+	s.broadcast("finding", StreamEvent{Kind: "finding", Finding: &fc})
 }
 
 func (s *Session) broadcast(kind string, payload StreamEvent) {
@@ -258,6 +300,8 @@ func (s *Session) Handle(ctx context.Context, conn *transport.Conn, f *proto.Fra
 		s.heapQuery(conn, f)
 	case proto.MethodHeapSnapshot:
 		s.heapSnapshot(conn, f)
+	case proto.MethodHeapAnalyze:
+		s.reply(conn, f, s.model.Analyze(), nil)
 	case proto.MethodMemRead:
 		s.memRead(conn, f)
 	case proto.MethodMemWrite:
@@ -371,6 +415,7 @@ func (s *Session) heapQuery(conn *transport.Conn, f *proto.Frame) {
 		"tombstones":  s.model.Tombstones(),
 		"mappings":    s.model.Mappings(),
 		"stats":       s.model.Stats(),
+		"analysis":    s.model.Analyze(),
 	}, nil)
 }
 
@@ -381,6 +426,7 @@ func (s *Session) heapSnapshot(conn *transport.Conn, f *proto.Frame) {
 		"tombstones":  s.model.Tombstones(),
 		"mappings":    s.model.Mappings(),
 		"stats":       s.model.Stats(),
+		"analysis":    s.model.Analyze(),
 		"findings":    s.engine.Recent(),
 	}, nil)
 }
@@ -891,6 +937,9 @@ func (s *Session) WaitExit(timeout time.Duration) bool {
 	return s.tracer.WaitExit(timeout)
 }
 
+// Analyze returns the current heap-feng-shui analysis.
+func (s *Session) Analyze() heap.Analysis { return s.model.Analyze() }
+
 // Model exposes the heap model for library users.
 func (s *Session) Model() *heap.Model { return s.model }
 
@@ -933,6 +982,7 @@ func (s *Session) Export(dir string) error {
 		"tombstones":  s.model.Tombstones(),
 		"mappings":    s.model.Mappings(),
 		"stats":       s.model.Stats(),
+		"analysis":    s.model.Analyze(),
 		"findings":    s.engine.Recent(),
 	}); err != nil {
 		return err

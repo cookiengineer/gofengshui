@@ -69,3 +69,24 @@ func TestMmapTracking(t *testing.T) {
 		t.Fatalf("expected one mmap, got %d", got)
 	}
 }
+
+func TestAnalyze(t *testing.T) {
+	m := NewModel()
+	m.Apply(ev(core.EventAlloc, 0x1000, 0x20, 0x18))
+	m.Apply(ev(core.EventAlloc, 0x1100, 0x20, 0x18))
+	m.Apply(ev(core.EventFree, 0x1000, 0x20, 0))
+	m.Apply(ev(core.EventAlloc, 0x1000, 0x20, 0x18))
+	a := m.Analyze()
+	if a.Live != 2 || a.Freed != 0 {
+		t.Fatalf("unexpected live/freed: %#v", a)
+	}
+	if len(a.SizeClasses) != 1 || a.SizeClasses[0].ChunkSize != 0x20 || a.SizeClasses[0].Live != 2 {
+		t.Fatalf("unexpected size classes: %#v", a.SizeClasses)
+	}
+	if len(a.Gaps) == 0 || a.Gaps[0].Size != 0x100-0x20 {
+		t.Fatalf("unexpected gaps: %#v", a.Gaps)
+	}
+	if len(a.Reuses) != 1 || a.Reuses[0].Addr != 0x1000 || a.Reuses[0].Count != 2 {
+		t.Fatalf("unexpected reuses: %#v", a.Reuses)
+	}
+}

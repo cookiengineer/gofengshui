@@ -28,6 +28,7 @@ const (
 	MethodEventsSubscribe = "events.subscribe"
 	MethodHeapQuery       = "heap.query"
 	MethodHeapSnapshot    = "heap.snapshot"
+	MethodHeapAnalyze     = "heap.analyze"
 	MethodMemRead         = "mem.read"
 	MethodMemWrite        = "mem.write"
 	MethodRegsGet         = "regs.get"

@@ -42,6 +42,24 @@ timeout 30s gofengshui run --report /reports/overflow \
 grep -q '"id":"D3"' /reports/overflow.events.jsonl
 echo "D3 overflow finding observed"
 
+echo "== allocation failure / OOM =="
+timeout 30s gofengshui run --report /reports/alloc_fail \
+  --stdout /reports/alloc_fail.stdout \
+  --stderr /reports/alloc_fail.stderr \
+  -- /opt/gfs/testdata/alloc_fail \
+  > /reports/alloc_fail.events.jsonl
+grep -q '"id":"D4"' /reports/alloc_fail.events.jsonl
+echo "D4 allocation-failure finding observed"
+
+echo "== crash classification =="
+timeout 30s gofengshui run --report /reports/crash \
+  --stdout /reports/crash.stdout \
+  --stderr /reports/crash.stderr \
+  -- /opt/gfs/testdata/crash \
+  > /reports/crash.events.jsonl
+grep -q '"id":"D6"' /reports/crash.events.jsonl
+echo "D6 crash finding observed"
+
 echo "== rop sink =="
 timeout 30s gofengshui validate --report /reports/rop \
   --sink gfs_sink --start gfs_pop_rdi_ret \

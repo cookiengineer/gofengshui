@@ -16,7 +16,9 @@ TESTBINS := $(BUILD_DIR)/testdata/alloc_loop \
             $(BUILD_DIR)/testdata/double_free \
             $(BUILD_DIR)/testdata/uaf \
             $(BUILD_DIR)/testdata/overflow \
-            $(BUILD_DIR)/testdata/rop_sink
+            $(BUILD_DIR)/testdata/rop_sink \
+            $(BUILD_DIR)/testdata/alloc_fail \
+            $(BUILD_DIR)/testdata/crash
 
 .PHONY: all build generate bpf test test-c clean fmt vet
 

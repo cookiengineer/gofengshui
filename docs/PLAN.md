@@ -120,9 +120,12 @@ Allocation {
 - D1 double/invalid free.
 - D2 UAF read/write from syscall buffers.
 - D3 heap overflow from access range versus allocation end.
-- D4 OOM/allocation failure.
+- D4 OOM/allocation failure (malloc NULL, mmap/mremap errno).
 - D5 sink/hijack hit (ptrace).
-- D6 crash classification (ptrace).
+- D6 crash classification (fatal signal, RIP symbolization and
+  controlled-RIP candidate flag).
+- Heap analysis: size-class histogram, largest live/freed chunks, address
+  gaps and address reuse.
 - D7 allocator metadata anomalies (later).
 
 ### Sink and ROP validation
