@@ -108,12 +108,14 @@ type Tracer struct {
 	follow         bool
 	deliverSignals bool
 
-	tids        map[int]*threadState
-	breakpoints map[uint64]*Breakpoint
-	watchpoints map[uint64]*Watchpoint
-	hw          [4]*hwSlot
-	nextID      uint64
-	threadHooks []func(int)
+	tids            map[int]*threadState
+	breakpoints     map[uint64]*Breakpoint
+	watchpoints     map[uint64]*Watchpoint
+	hw              [4]*hwSlot
+	nextID          uint64
+	threadHooks     []func(int)
+	execHooks       []func(int)
+	initialStopSeen bool
 
 	stops chan Stop
 	errs  chan error
@@ -362,6 +364,12 @@ func (t *Tracer) handleExit(tid, code int) {
 
 func (t *Tracer) handleStop(tid int, ws unix.WaitStatus) {
 	t.ensureOptions(tid)
+	t.mu.Lock()
+	initial := !t.initialStopSeen
+	if initial {
+		t.initialStopSeen = true
+	}
+	t.mu.Unlock()
 	sig := int(ws.StopSignal())
 	event := int(ws.TrapCause())
 	if os.Getenv("GFS_PTRACE_LOG") != "" {
@@ -392,13 +400,24 @@ func (t *Tracer) handleStop(tid int, ws unix.WaitStatus) {
 			}
 		case int(unix.PTRACE_EVENT_EXEC):
 			t.applyHardware(tid)
+			t.runExecHooks(tid)
+			regs, _ := t.registersLocked(tid)
+			if initial && tid == t.pid {
+				t.mu.Lock()
+				if ts := t.tids[tid]; ts != nil {
+					ts.stopped = true
+				}
+				t.mu.Unlock()
+				t.emit(Stop{TID: tid, PID: t.pid, Reason: "exec", Regs: regs, Timestamp: time.Now()})
+				return
+			}
 			t.mu.Lock()
 			if ts := t.tids[tid]; ts != nil {
-				ts.stopped = true
+				ts.stopped = false
 			}
 			t.mu.Unlock()
-			regs, _ := t.registersLocked(tid)
 			t.emit(Stop{TID: tid, PID: t.pid, Reason: "exec", Regs: regs, Timestamp: time.Now()})
+			_ = unix.PtraceCont(tid, 0)
 			return
 		case int(unix.PTRACE_EVENT_STOP):
 			regs, _ := t.registersLocked(tid)
@@ -629,6 +648,25 @@ func (t *Tracer) AddThreadHook(fn func(int)) {
 func (t *Tracer) runThreadHooks(tid int) {
 	t.mu.Lock()
 	hooks := append([]func(int){}, t.threadHooks...)
+	t.mu.Unlock()
+	for _, fn := range hooks {
+		fn(tid)
+	}
+}
+
+// AddExecHook registers a callback for PTRACE_EVENT_EXEC.
+func (t *Tracer) AddExecHook(fn func(int)) {
+	if fn == nil {
+		return
+	}
+	t.mu.Lock()
+	t.execHooks = append(t.execHooks, fn)
+	t.mu.Unlock()
+}
+
+func (t *Tracer) runExecHooks(tid int) {
+	t.mu.Lock()
+	hooks := append([]func(int){}, t.execHooks...)
 	t.mu.Unlock()
 	for _, fn := range hooks {
 		fn(tid)

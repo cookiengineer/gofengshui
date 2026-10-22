@@ -94,7 +94,7 @@ type Tracer struct {
 	links       []link.Link
 	libcPath    string
 	ex          *link.Executable
-	attachedTID map[int]bool
+	attachedKey map[string]bool
 	closed      bool
 
 	events     *ebpf.Map
@@ -146,7 +146,7 @@ func New(cfg core.Config, target core.Target) (*Tracer, error) {
 		configMap:   coll.Maps["config"],
 		out:         make(chan core.Event, 4096),
 		errs:        make(chan error, 16),
-		attachedTID: make(map[int]bool),
+		attachedKey: make(map[string]bool),
 		done:        make(chan struct{}),
 		target:      target,
 		cfg:         cfg,
@@ -183,7 +183,7 @@ func (t *Tracer) Attach() error {
 			t.mu.Unlock()
 			var attachErrs []error
 			for _, tid := range taskIDs(t.target.PID) {
-				if err := t.attachThread(tid); err != nil {
+				if err := t.attachThread(tid, t.libcPath); err != nil {
 					debugf("attach thread %d: %v", tid, err)
 					attachErrs = append(attachErrs, err)
 				}
@@ -226,18 +226,39 @@ func (t *Tracer) Attach() error {
 // AttachThread attaches allocator probes for one target thread. It is used
 // for threads created after the session started.
 func (t *Tracer) AttachThread(tid int) error {
-	return t.attachThread(tid)
+	return t.attachThread(tid, "")
 }
 
-func (t *Tracer) attachThread(tid int) error {
+// AttachThreadPath attaches allocator probes for a thread/task that may have
+// exec'd into a different libc path.
+func (t *Tracer) AttachThreadPath(tid int, path string) error {
+	return t.attachThread(tid, path)
+}
+
+func (t *Tracer) attachThread(tid int, path string) error {
+	if path == "" {
+		path = t.libcPath
+	}
+	if path == "" {
+		return nil
+	}
+	key := fmt.Sprintf("%d:%s", tid, path)
 	t.mu.Lock()
-	if t.closed || t.ex == nil || t.attachedTID[tid] {
+	if t.closed || t.attachedKey[key] {
 		t.mu.Unlock()
 		return nil
 	}
-	t.attachedTID[tid] = true
 	ex := t.ex
-	path := t.libcPath
+	if path != t.libcPath || ex == nil {
+		var err error
+		ex, err = link.OpenExecutable(path)
+		if err != nil {
+			t.mu.Unlock()
+			return fmt.Errorf("open allocator %s: %w", path, err)
+		}
+	}
+
+	t.attachedKey[key] = true
 	t.mu.Unlock()
 
 	opts := &link.UprobeOptions{PID: tid}

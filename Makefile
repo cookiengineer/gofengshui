@@ -19,7 +19,8 @@ TESTBINS := $(BUILD_DIR)/testdata/alloc_loop \
             $(BUILD_DIR)/testdata/rop_sink \
             $(BUILD_DIR)/testdata/alloc_fail \
             $(BUILD_DIR)/testdata/crash \
-            $(BUILD_DIR)/testdata/threads
+            $(BUILD_DIR)/testdata/threads \
+            $(BUILD_DIR)/testdata/fork_exec
 
 .PHONY: all build generate bpf test test-c clean fmt vet
 

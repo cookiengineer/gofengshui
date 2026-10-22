@@ -292,6 +292,9 @@ func (a *Agent) createSession(p CreateParams, cfg core.Config) (*Session, error)
 	s.tracer.AddThreadHook(func(tid int) {
 		_ = tracer.AttachThread(tid)
 	})
+	s.tracer.AddExecHook(func(tid int) {
+		_ = tracer.AttachThreadPath(tid, target.LibcPath)
+	})
 	return s, nil
 }
 

@@ -64,9 +64,9 @@ Status legend: `yes`, `partial`, `no`. Updated incrementally during work.
 
 | # | Task | Implemented? | Tested? | Verified? |
 |---|---|---|---|---|
-| M3.1 | Multi-thread tracing, clone hooks, per-thread debug registers | yes | yes | partial |
-| M3.2 | Stop-the-world for all traced threads | yes | yes | partial |
-| M3.3 | fork/exec follow | partial | yes | partial |
+| M3.1 | Multi-thread tracing, clone hooks, per-thread debug registers | yes | yes | yes |
+| M3.2 | Stop-the-world for all traced threads | yes | yes | yes |
+| M3.3 | fork/exec follow | yes | yes | yes |
 | M3.4 | dlopen rescan / re-attach | no | no | no |
 | M3.5 | tcache / main_arena introspection | no | no | no |
 | M3.6 | Additional syscall coverage | partial | no | no |
@@ -76,7 +76,7 @@ Status legend: `yes`, `partial`, `no`. Updated incrementally during work.
 | M3.10 | Go runtime backend | no | no | no |
 | M3.11 | Docs and CI assertion DSL | yes | partial | no |
 | M3.12 | Heap-feng-shui analysis (size classes, gaps, reuse) | yes | yes | yes |
-| M3.13 | Per-thread allocator uprobes for new threads | yes | partial | no |
+| M3.13 | Per-thread allocator uprobes for new threads | yes | yes | yes |
 
 ## Privileged Integration Result (2026-10-22)
 
@@ -88,6 +88,18 @@ Status legend: `yes`, `partial`, `no`. Updated incrementally during work.
 - ROP flow reached `gfs_sink` with `RDI=0x4141`
 - `rop.json` reports `verified: true`
 - reports and event streams written under `build/reports/`
+
+## Latest Privileged Run (2026-10-22)
+
+All checks passed with status 0:
+
+- D1/D2/D3/D4/D6 findings
+- clean malloc/free loop with zero false positives
+- heap analysis export
+- multi-thread allocations from 5 threads
+- fork/exec allocations from 2 processes
+- `rop.arm` and `hijack.watch` both verified with `RDI=0x4141`
+- unix-socket session + live D2 event + close
 
 ## Verification Notes
 

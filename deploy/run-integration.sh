@@ -3,7 +3,15 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 LOG_DIR="$PWD/build/logs"
-mkdir -p "$LOG_DIR" build/reports
+mkdir -p "$LOG_DIR"
+# Privileged containers write reports as root. Always clean and restore
+# ownership through sudo, otherwise the next run cannot remove them.
+fix_reports() {
+  sudo chown -R "$(id -u):$(id -g)" build/reports 2>/dev/null || true
+}
+trap fix_reports EXIT
+sudo rm -rf -- "$PWD/build/reports"
+mkdir -p build/reports
 LOG="$LOG_DIR/integration-$(date +%Y%m%d-%H%M%S).log"
 ln -sfn "$LOG" "$LOG_DIR/latest.log"
 
@@ -59,6 +67,7 @@ sudo podman run --rm \
 status=${PIPESTATUS[0]}
 set -e
 
+fix_reports
 {
   echo
   echo "=== finished: $(date -Is) status=$status ==="

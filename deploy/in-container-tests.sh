@@ -99,6 +99,21 @@ fi
 grep -q '"analysis"' /reports/threads/heap.json
 echo "allocator events observed from $THREAD_TIDS threads; analysis exported"
 
+echo "== fork/exec follow =="
+timeout 30s gofengshui run --follow --report /reports/fork_exec \
+  --stdout /reports/fork_exec.stdout \
+  --stderr /reports/fork_exec.stderr \
+  -- /opt/gfs/testdata/fork_exec \
+  > /reports/fork_exec.events.jsonl
+FORK_PIDS=$(grep -E '"type":1([,}])' /reports/fork_exec.events.jsonl \
+  | grep -o '"pid":[0-9]*' | sort -u | wc -l)
+if [ "$FORK_PIDS" -lt 2 ]; then
+  echo "expected allocator events from parent and exec child, got $FORK_PIDS process(es)" >&2
+  exit 1
+fi
+grep -q '"analysis"' /reports/fork_exec/heap.json
+echo "allocator events observed from $FORK_PIDS processes across fork/exec"
+
 echo "== rop sink =="
 timeout 30s gofengshui validate --report /reports/rop \
   --sink gfs_sink --start gfs_pop_rdi_ret \

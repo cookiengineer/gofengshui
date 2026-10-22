@@ -175,6 +175,17 @@ gofengshui validate \
   -- ./poc
 ```
 
+## Report ownership
+
+The privileged container runs as root, so `build/reports/` is created with
+root ownership. `deploy/run-integration.sh` removes old reports and restores
+ownership automatically. For reports created by an interactive
+`deploy/dev-container.sh` session, run:
+
+```sh
+deploy/fix-permissions.sh
+```
+
 ## Security
 
 The agent is root-equivalent: it loads eBPF programs and traces processes.
