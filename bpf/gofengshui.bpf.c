@@ -88,6 +88,10 @@ static __always_inline int gfs_allowed(struct gfs_config *cfg)
 	if (!cfg)
 		return 0;
 
+	if (cfg->agent_pid &&
+	    (bpf_get_current_pid_tgid() >> 32) == cfg->agent_pid)
+		return 0;
+
 	if (cfg->cgroup_id) {
 		__u64 id = bpf_get_current_cgroup_id();
 		if (cfg->cgroup_id != id)
@@ -458,6 +462,33 @@ static __always_inline int gfs_read_reg(struct pt_regs *regs, __u64 *out,
 					unsigned long offset)
 {
 	return bpf_probe_read_kernel(out, sizeof(*out), (void *)regs + offset);
+}
+
+SEC("raw_tracepoint/oom_kill_process")
+int gfs_oom_kill(struct bpf_raw_tracepoint_args *ctx)
+{
+	struct gfs_config *cfg = gfs_cfg();
+	struct gfs_event ev;
+
+	if (!gfs_allowed(cfg))
+		return 0;
+	gfs_init(&ev, GFS_EV_OOM);
+	ev.addr = ctx->args[0];
+	gfs_emit(&ev);
+	return 0;
+}
+
+SEC("kprobe/oom_kill_process")
+int gfs_oom_kprobe(struct pt_regs *ctx)
+{
+	struct gfs_config *cfg = gfs_cfg();
+	struct gfs_event ev;
+
+	if (!gfs_allowed(cfg))
+		return 0;
+	gfs_init(&ev, GFS_EV_OOM);
+	gfs_emit(&ev);
+	return 0;
 }
 
 SEC("raw_tracepoint/sys_enter")

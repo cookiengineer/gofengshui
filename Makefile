@@ -42,7 +42,8 @@ TESTBINS := $(BUILD_DIR)/testdata/alloc_loop \
             $(BUILD_DIR)/testdata/uaf_direct \
             $(BUILD_DIR)/testdata/dlopen_alloc \
             $(BUILD_DIR)/testdata/cxx_alloc \
-            $(BUILD_DIR)/testdata/size_swap
+            $(BUILD_DIR)/testdata/size_swap \
+            $(BUILD_DIR)/testdata/oom
 
 TESTLIBS := $(BUILD_DIR)/testdata/libgfsplugin.so
 

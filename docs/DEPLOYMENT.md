@@ -95,7 +95,9 @@ deploy/run-integration.sh
 ```
 
 The host script rebuilds the binary, test PoCs, and rootful container image
-before running, unless `GFS_SKIP_BUILD=1` is set. It writes a timestamped log
+before running, unless `GFS_SKIP_BUILD=1` is set. The integration container is
+memory-limited (`GFS_MEMORY_LIMIT`, default `2g`) so the OOM tracepoint test has
+a bounded cgroup to trigger against. It writes a timestamped log
 to `build/logs/integration-*.log` and updates `build/logs/latest.log`. The
 container writes its own copy to `build/reports/integration.log`. Both include
 the eBPF verifier log when a program fails to load (`GFS_BPF_LOG=1`).
@@ -121,6 +123,8 @@ Expected results:
 - overflow PoC emits a `D3` finding
 - tcache-poisoning PoC emits a `D7` finding
 - metadata-corruption PoC emits a `D8` finding before glibc aborts
+- OOM PoC triggers a bounded cgroup OOM and emits a `D4` kernel-OOM finding;
+  the agent uses the OOM tracepoint when exported, otherwise a kprobe fallback
 - size-swap PoC emits a `D9` size-mismatch finding
 - realloc churn runs clean and exercises the realloc-aware timeline
 - attach backfill recovers chunks from both the main heap and thread arenas

@@ -15,6 +15,7 @@ const (
 
 type freeKey struct {
 	TID   uint32
+	Arena uint64
 	Chunk uint64
 }
 
@@ -65,16 +66,25 @@ func (m *Model) recordFree(addr, size uint64, tid uint32, ts int64) {
 	if _, exists := m.freeLoc[addr]; exists {
 		return
 	}
-	k := freeKey{TID: tid, Chunk: size}
+	tkey := freeKey{TID: tid, Chunk: size}
 	tcache := false
 	if m.profile.Tcache && size <= m.profile.TcacheMaxChunk {
 		n := 0
-		for _, e := range m.freeSeq[k] {
+		for _, e := range m.freeSeq[tkey] {
 			if e.Tcache {
 				n++
 			}
 		}
 		tcache = n < m.profile.TcacheCount
+	}
+	k := tkey
+	arena, hasArena := m.arenaBase(addr)
+	if hasArena {
+		m.tidArena[tid] = arena
+		if !tcache {
+			// Fastbins/smallbins belong to the arena, not the thread.
+			k = freeKey{Arena: arena, Chunk: size}
+		}
 	}
 	m.freeSeq[k] = append(m.freeSeq[k], freeEntry{Addr: addr, TS: ts, TID: tid, Tcache: tcache})
 	m.freeLoc[addr] = k
@@ -121,12 +131,17 @@ func (m *Model) Predict(tid uint32, reqSize uint64, limit int) Prediction {
 	var seq []freeEntry
 	if tid != 0 {
 		seq = append(seq, m.freeSeq[freeKey{TID: tid, Chunk: chunk}]...)
+		if arena, ok := m.tidArena[tid]; ok {
+			seq = append(seq, m.freeSeq[freeKey{Arena: arena, Chunk: chunk}]...)
+		}
 	} else {
 		for k, list := range m.freeSeq {
 			if k.Chunk == chunk {
 				seq = append(seq, list...)
 			}
 		}
+	}
+	if len(seq) > 1 {
 		sort.Slice(seq, func(i, j int) bool { return seq[i].TS < seq[j].TS })
 	}
 	p.FreePool = len(seq)
@@ -154,7 +169,9 @@ func (m *Model) Predict(tid uint32, reqSize uint64, limit int) Prediction {
 				older = append(older, e)
 			}
 		}
-		if len(tcacheSeq) > m.profile.TcacheCount {
+		// tcache is per-thread; only a single-thread prediction is capped.
+		// Merged tid=0 views can legitimately contain 7 entries per thread.
+		if tid != 0 && len(tcacheSeq) > m.profile.TcacheCount {
 			tcacheSeq = tcacheSeq[len(tcacheSeq)-m.profile.TcacheCount:]
 		}
 		p.TcacheCount = len(tcacheSeq)
@@ -210,7 +227,11 @@ func (m *Model) Predict(tid uint32, reqSize uint64, limit int) Prediction {
 func (m *Model) FreeSequence(tid uint32, chunkSize uint64) []uint64 {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	list := m.freeSeq[freeKey{TID: tid, Chunk: chunkSize}]
+	list := append([]freeEntry(nil), m.freeSeq[freeKey{TID: tid, Chunk: chunkSize}]...)
+	if arena, ok := m.tidArena[tid]; ok {
+		list = append(list, m.freeSeq[freeKey{Arena: arena, Chunk: chunkSize}]...)
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].TS < list[j].TS })
 	out := make([]uint64, 0, len(list))
 	for _, e := range list {
 		out = append(out, e.Addr)

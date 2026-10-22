@@ -414,5 +414,25 @@ cleanup_dl_agent
 trap - EXIT
 echo "dlopen module resolved and allocator probes refreshed"
 
+echo "== kernel OOM tracepoint =="
+timeout 40s gofengshui run --oom --report /reports/oom --expect-findings D4 \
+  --stdout /reports/oom.stdout \
+  --stderr /reports/oom.stderr \
+  -- /bin/sleep 8 \
+  > /reports/oom.events.jsonl &
+OOM_AGENT=$!
+for _ in $(seq 1 50); do
+  grep -q 'gofengshui: session' /reports/oom.stderr 2>/dev/null && break
+  sleep 0.1
+done
+set +e
+timeout 30s /opt/gfs/testdata/oom > /reports/oom.victim.stdout 2> /reports/oom.victim.stderr
+OOM_VICTIM_STATUS=$?
+set -e
+wait "$OOM_AGENT"
+grep -q '"id":"D4"' /reports/oom.events.jsonl
+grep -q 'kernel OOM kill' /reports/oom.events.jsonl
+echo "kernel OOM event observed (victim status $OOM_VICTIM_STATUS)"
+
 echo
 echo "all in-container tests passed"

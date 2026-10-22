@@ -69,6 +69,7 @@ verify_findings() {
   local realloc=build/reports/realloc.events.jsonl
   local metadata=build/reports/metadata.events.jsonl
   local sizeswap=build/reports/size_swap.events.jsonl
+  local oom=build/reports/oom.events.jsonl
   local cxx=build/reports/cxx.events.jsonl
   local uafdirect=build/reports/uaf_direct.events.jsonl
   local dlopen=build/reports/dlopen-refresh.json
@@ -117,6 +118,12 @@ verify_findings() {
   else
     require_report_grep '"id":"D9"' "$sizeswap" "D9 size mismatch present" || failed=1
     require_report_grep 'chunk size changed while allocated' "$sizeswap" "D9 classified the mismatch" || failed=1
+  fi
+  if [ ! -s "$oom" ]; then
+    echo "FAIL: missing $oom" >&2
+    failed=1
+  else
+    require_report_grep 'kernel OOM kill' "$oom" "kernel OOM tracepoint captured" || failed=1
   fi
   if [ ! -s "$cxx" ]; then
     echo "FAIL: missing $cxx" >&2
@@ -200,6 +207,8 @@ fi
 sudo podman run --rm \
   --name gofengshui-integration \
   --privileged \
+  --memory "${GFS_MEMORY_LIMIT:-2g}" \
+  --memory-swap "${GFS_MEMORY_LIMIT:-2g}" \
   --security-opt seccomp=unconfined \
   --security-opt apparmor=unconfined \
   -e GFS_BPF_LOG="${GFS_BPF_LOG:-1}" \

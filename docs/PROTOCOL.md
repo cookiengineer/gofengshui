@@ -36,7 +36,7 @@ Rules:
   "pause":false,
   "follow":false,
   "config":{"heap":true,"syscalls":true,"uaf":true,"stacks":true,"detectors":true,
-            "no_libc":false,"no_ebpf":false,"glibc_version":"","watch_freed":false,"sample_stacks":0}
+            "no_libc":false,"no_ebpf":false,"glibc_version":"","watch_freed":false,"sample_stacks":0,"oom":false}
 }}
 ```
 
@@ -121,8 +121,9 @@ for all current threads and libc-like modules, returning `allocator_paths` and
 `threads` in the result.
 
 It models glibc `request2size`, per-thread tcache LIFO (7 chunks), fastbin
-LIFO for chunk sizes up to `0x80`, and smallbin FIFO above that. `tid: 0`
-merges free sequences across threads. Candidates include source and
+LIFO for chunk sizes up to `0x80`, and smallbin FIFO above that. Tcache is
+per-thread; fastbins and smallbins are keyed by the owning heap/arena region.
+`tid: 0` merges free sequences across threads. Candidates include source and
 confidence (`tcache-lifo`/high, `fastbin-lifo`/medium,
 `smallbin-fifo`/medium, `free-order`/low).
 

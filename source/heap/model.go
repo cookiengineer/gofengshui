@@ -3,6 +3,7 @@ package heap
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -53,17 +54,18 @@ type Model struct {
 	nextID uint64
 	seq    uint64
 
-	allocs  map[uint64]*core.Allocation
-	byID    map[uint64]*core.Allocation
-	reuses  map[uint64]int
-	freeSeq map[freeKey][]freeEntry
-	freeLoc map[uint64]freeKey
-	tombs   map[uint64]Tombstone
-	mmaps   map[uint64]Mmap
-	pending map[uint32]pendingMmap
-	regions []Region
-	profile Profile
-	hasMaps bool
+	allocs   map[uint64]*core.Allocation
+	byID     map[uint64]*core.Allocation
+	reuses   map[uint64]int
+	freeSeq  map[freeKey][]freeEntry
+	freeLoc  map[uint64]freeKey
+	tidArena map[uint32]uint64
+	tombs    map[uint64]Tombstone
+	mmaps    map[uint64]Mmap
+	pending  map[uint32]pendingMmap
+	regions  []Region
+	profile  Profile
+	hasMaps  bool
 
 	findings []core.Finding
 }
@@ -75,15 +77,16 @@ func NewModel() *Model {
 // NewModelWithProfile creates a model using the given allocator profile.
 func NewModelWithProfile(p Profile) *Model {
 	return &Model{
-		allocs:  make(map[uint64]*core.Allocation),
-		byID:    make(map[uint64]*core.Allocation),
-		reuses:  make(map[uint64]int),
-		freeSeq: make(map[freeKey][]freeEntry),
-		freeLoc: make(map[uint64]freeKey),
-		tombs:   make(map[uint64]Tombstone),
-		mmaps:   make(map[uint64]Mmap),
-		pending: make(map[uint32]pendingMmap),
-		profile: p,
+		allocs:   make(map[uint64]*core.Allocation),
+		byID:     make(map[uint64]*core.Allocation),
+		reuses:   make(map[uint64]int),
+		freeSeq:  make(map[freeKey][]freeEntry),
+		freeLoc:  make(map[uint64]freeKey),
+		tidArena: make(map[uint32]uint64),
+		tombs:    make(map[uint64]Tombstone),
+		mmaps:    make(map[uint64]Mmap),
+		pending:  make(map[uint32]pendingMmap),
+		profile:  p,
 	}
 }
 
@@ -171,6 +174,15 @@ func (m *Model) Apply(ev core.Event) []core.Finding {
 		m.applyMunmap(ev)
 	case core.EventMemAccess:
 		out = append(out, m.checkAccess(ev)...)
+	case core.EventOOM:
+		m.findings = append(m.findings, core.Finding{
+			ID:        "D4",
+			Severity:  "critical",
+			Message:   fmt.Sprintf("kernel OOM kill event (victim task 0x%x)", ev.Addr),
+			Event:     &ev,
+			Timestamp: ev.Timestamp,
+			Details:   map[string]any{"kind": "oom", "victim_task": ev.Addr},
+		})
 	}
 
 	out = append(out, m.findings...)
@@ -347,6 +359,25 @@ func (m *Model) freeReallocOld(addr uint64, ts time.Time, tid uint32) {
 // checkMetadata validates the chunk and next-chunk size words captured at
 // free() entry. It catches corrupted size fields and cleared PREV_INUSE bits
 // that would otherwise abort inside glibc or go unnoticed.
+// arenaBase returns the mapping base that owns a glibc chunk address. It
+// accepts the main heap and anonymous arena mappings, and skips thread stacks
+// and special mappings.
+func (m *Model) arenaBase(addr uint64) (uint64, bool) {
+	for _, r := range m.regions {
+		if addr < r.Start || addr >= r.End {
+			continue
+		}
+		if strings.HasPrefix(r.Path, "[") && r.Path != "[heap]" {
+			continue
+		}
+		if r.Path != "" && r.Path != "[heap]" {
+			continue
+		}
+		return r.Start, true
+	}
+	return 0, false
+}
+
 func (m *Model) checkMetadata(ev core.Event) []core.Finding {
 	if ev.Flags&core.EventFlagMetadata == 0 {
 		return nil
@@ -642,6 +673,7 @@ func (m *Model) Reset() {
 	m.reuses = make(map[uint64]int)
 	m.freeSeq = make(map[freeKey][]freeEntry)
 	m.freeLoc = make(map[uint64]freeKey)
+	m.tidArena = make(map[uint32]uint64)
 	m.tombs = make(map[uint64]Tombstone)
 	m.mmaps = make(map[uint64]Mmap)
 	m.pending = make(map[uint32]pendingMmap)

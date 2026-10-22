@@ -17,6 +17,7 @@ enum gfs_event_type {
 	GFS_EV_SYSCALL_RET = 10,
 	GFS_EV_ALLOC_FAIL = 11,
 	GFS_EV_STAT = 12,
+	GFS_EV_OOM = 13,
 };
 
 enum gfs_alloc_op {
@@ -64,7 +65,7 @@ struct gfs_config {
 	__u32 pid;
 	__u32 flags;
 	__u32 sample;
-	__u32 pad;
+	__u32 agent_pid;
 };
 
 struct gfs_pending {

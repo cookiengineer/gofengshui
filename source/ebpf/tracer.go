@@ -37,7 +37,7 @@ type bpfConfig struct {
 	PID      uint32
 	Flags    uint32
 	Sample   uint32
-	Pad      uint32
+	AgentPID uint32
 }
 
 type bpfEvent struct {
@@ -197,6 +197,34 @@ func (t *Tracer) Attach() error {
 	}
 
 	if t.cfg.Syscalls {
+		if t.cfg.OOM {
+			attached := false
+			if prog := t.coll.Programs["gfs_oom_kill"]; prog != nil {
+				l, err := link.AttachRawTracepoint(link.RawTracepointOptions{
+					Name: "oom_kill_process", Program: prog,
+				})
+				if err == nil {
+					t.links = append(t.links, l)
+					attached = true
+				} else {
+					debugf("attach oom tracepoint: %v", err)
+				}
+			}
+			if !attached {
+				if prog := t.coll.Programs["gfs_oom_kprobe"]; prog != nil {
+					l, err := link.Kprobe("oom_kill_process", prog, nil)
+					if err != nil {
+						debugf("attach oom kprobe: %v", err)
+						select {
+						case t.errs <- fmt.Errorf("attach oom kprobe: %w", err):
+						default:
+						}
+					} else {
+						t.links = append(t.links, l)
+					}
+				}
+			}
+		}
 		for _, name := range []string{"sys_enter", "sys_exit"} {
 			prog := t.coll.Programs["gfs_"+name]
 			if prog == nil {
@@ -412,6 +440,7 @@ func (t *Tracer) updateConfig() error {
 		PID:      pid,
 		Flags:    t.cfg.Flags(),
 		Sample:   t.cfg.SampleStacks,
+		AgentPID: uint32(os.Getpid()),
 	}
 	key := uint32(0)
 	return t.configMap.Update(key, &c, ebpf.UpdateAny)

@@ -149,7 +149,7 @@ func (a *Agent) Start(p CreateParams) (*Session, error) {
 	}
 	cfg := p.Config
 	if !cfg.Heap && !cfg.Syscalls && !cfg.UAF && !cfg.Stacks && !cfg.Detectors &&
-		!cfg.NoEBPF && !cfg.NoLibc && cfg.GlibcVersion == "" && !cfg.WatchFreed && cfg.SampleStacks == 0 {
+		!cfg.NoEBPF && !cfg.NoLibc && cfg.GlibcVersion == "" && !cfg.WatchFreed && cfg.SampleStacks == 0 && !cfg.OOM {
 		cfg = core.DefaultConfig()
 	}
 	s, err := a.createSession(p, cfg)

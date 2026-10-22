@@ -67,7 +67,7 @@ target process
 | allocator | uprobe/uretprobe `malloc`, `calloc`, `realloc`, `free` | requested size, pointer, header size |
 | allocator | `aligned_alloc`, `posix_memalign`, C++ new/delete | when symbols exist |
 | syscalls | raw `sys_enter` / `sys_exit` | mmap, munmap, brk, mremap, read, write, openat, execve, sendfile, splice |
-| kernel | OOM tracepoints (later) | allocation failure context |
+| kernel | `oom_kill_process` raw tracepoint or kprobe (`--oom`) | kernel OOM kill events (D4) |
 | stacks | `bpf_get_stackid(BPF_F_USER_STACK)` | allocation call site |
 
 BPF maps:
@@ -132,7 +132,8 @@ Allocation {
 - Allocator profiles: detect glibc 2.26–2.44 behavior from the target libc
   (`tcache`, safe-linking, tcache key, bin limits) with an explicit override.
 - Allocation prediction: profile-driven glibc request2size, per-thread tcache
-  LIFO (first 7 frees), fastbin LIFO and smallbin FIFO candidate ordering.
+  LIFO (first 7 frees), plus fastbin LIFO and smallbin FIFO ordering keyed by
+  arena. Arena regions are refreshed from maps as threads create heaps.
 - Realloc-aware timeline: moving reallocs free the old chunk; in-place reallocs
   preserve the allocation ID.
 - Baseline/diff snapshots and advisory spray recipes (`heap.baseline`,
@@ -284,6 +285,8 @@ Implemented and locally tested:
 - opt-in automatic write watchpoints on recently freed chunks (`--watch-freed`)
 - D8 chunk/next-chunk metadata validation at free() entry
 - D9 allocated-vs-free chunk size consistency checks
+- per-arena fastbin/smallbin modeling with per-thread tcache
+- kernel OOM tracepoint/kprobe integration
 - direct UAF writes caught by freed-chunk auto-watchpoints
 - ringbuf/drop accounting, stack sampling controls and model benchmarks
 - versioned release artifacts (`make dist`) with checksums
@@ -310,13 +313,19 @@ Privileged end-to-end verification (2026-10-22):
 - D7 tcache link anomaly observed on glibc 2.39; allocator detection and an
   explicit 2.31 override verified end-to-end
 - D8 metadata corruption and D9 size overwrites detected at free() entry
+- kernel OOM kills captured through the `oom_kill_process` tracepoint/kprobe
 - D6 fault address/classification, crash stack hits, and D2 checks across
   openat/execve/sendfile/splice verified end-to-end
+- direct-UAF writes caught by freed-chunk auto-watchpoints
 - realloc churn, baseline diff and spray recipe verified end-to-end
 - thread-arena attach backfill verified end-to-end
+- C++ new/delete labelling and dlopen allocator reattachment verified
+- per-arena prediction, zero ringbuf drops and sampled stacks verified
 - ROP flow reached `gfs_sink` with `RDI=0x4141` and `verified: true`
 
 Deferred:
 
-- full multi-thread debug-register inheritance
-- tcache/main_arena introspection, musl/Go backends
+- direct tcache/main_arena introspection
+- memcg OOM tracepoints
+- race/TOCTOU correlation research
+- musl and Go runtime backends, arm64 support

@@ -70,7 +70,7 @@ Status legend: `yes`, `partial`, `no`. Updated incrementally during work.
 | M3.4 | dlopen rescan / re-attach (`maps.refresh`, resolver retry) | yes | yes | yes |
 | M3.5 | tcache / main_arena introspection | no | no | no |
 | M3.6 | Additional syscall coverage (`openat`, `execve`, `sendfile`, `splice`) | yes | yes | yes |
-| M3.7 | OOM tracepoint integration | no | no | no |
+| M3.7 | OOM tracepoint/kprobe integration | yes | yes | yes |
 | M3.8 | Performance/overhead benchmarks | yes | yes | yes |
 | M3.9 | musl backend | no | no | no |
 | M3.10 | Go runtime backend | no | no | no |
@@ -86,8 +86,9 @@ Status legend: `yes`, `partial`, `no`. Updated incrementally during work.
 | M3.20 | Realloc-aware heap timeline (moved and in-place) | yes | yes | yes |
 | M3.21 | Baseline diff + spray recipe (`heap.baseline`/`diff`/`recipe`) | yes | yes | yes |
 | M3.22 | D8 chunk/next-chunk metadata corruption detector | yes | yes | yes |
-| M3.24 | D9 allocated-vs-free chunk size mismatch detector | yes | yes | yes |
 | M3.23 | Automatic freed-chunk write watchpoints (`--watch-freed`) | yes | yes | yes |
+| M3.24 | D9 allocated-vs-free chunk size mismatch detector | yes | yes | yes |
+| M3.25 | Per-arena bin modeling (tcache stays per-thread) | yes | yes | yes |
 
 ## Privileged Integration Result (2026-10-22)
 
@@ -111,7 +112,8 @@ All checks passed with status 0:
 - thread-arena attach backfill, D8 metadata detection, and direct-UAF auto-watch verified
 - BPF event/drop accounting verified with `drops: 0`
 - dlopen rescan and allocator probe reattachment verified
-- C++ new/delete labelling, D9 size-mismatch detection, and stack sampling verified
+- C++ new/delete labelling, D9 size-mismatch detection, stack sampling, and per-arena prediction verified
+- kernel OOM capture verified with an isolated sibling victim
 - clean malloc/free loop with zero false positives
 - heap analysis export
 - multi-thread allocations from 5 threads
@@ -129,7 +131,7 @@ All checks passed with status 0:
 Privileged suite passed with status 0:
 
 - software breakpoint trigger path
-- allocation watch by heap ID handler (live watchpoint trigger still to verify)
+- allocation watch by heap ID with a live hardware-watchpoint trigger
 - event replay cursor
 - stdio JSONL session with live D2 event and `assert`
 - attach CLI workflow
@@ -165,6 +167,7 @@ of glibc's tcache or arena structures.
 - main-heap and thread-arena attach backfill
 - C++ new/delete labelling and dlopen probe reattachment
 - BPF stats with zero ring-buffer drops and sampled stack capture
+- kernel OOM tracepoint/kprobe capture with an isolated victim
 - privileged host gates for every item above
 
 Release packaging (`make dist`) is verified locally and is not part of the
@@ -175,12 +178,10 @@ privileged container suite.
 - `yes` under Tested means covered by an automated or executed local check.
 - `yes` under Verified means observed end-to-end in the relevant environment.
 - Implemented-but-not-fully-verified items:
-  - M1.14 stdio end-to-end session driving
-  - M1.17 event replay/cursor edge cases
-  - M2.6 software-breakpoint trigger path
-  - M2.14 protocol `assert` command (ROP JSON is verified)
-  - M2.15 CLI `attach` workflow
-  - M3.11 CI assertion DSL/runner
+  - M1.17 event replay/cursor edge cases beyond the current replay test
+  - M3.11 CI assertion DSL beyond the implemented CLI expectation runner
+- All other implemented items are covered by unit tests and the privileged
+  integration suite.
 
 ## Remaining Work
 
@@ -200,19 +201,19 @@ privileged container suite.
 
 | Item | Status |
 |---|---|
-| Direct tcache/main_arena/bin introspection | implement |
+| Direct tcache/main_arena/bin introspection | deferred |
 | Allocator-version profiles (glibc 2.26–2.44) | done |
 | tcache poisoning / safe-linking anomaly detector (D7) | done |
 | Realloc-style free sequences in predictor | done |
 | C++ new/delete symbol-specific probes | done |
-| Better separation of per-arena vs per-thread bins | improve |
+| Better separation of per-arena vs per-thread bins | done |
 | Baseline comparison and spray recipe export | done |
 
 ### P2 — Zero-day and crash validation
 
 | Item | Status |
 |---|---|
-| Kernel OOM/memcg tracepoints | implement |
+| Kernel OOM/memcg tracepoints | OOM done; memcg deferred |
 | Fault address via `PTRACE_GETSIGINFO` | done |
 | Additional syscall buffers (`openat`, `execve`, `sendfile`, `splice`) | done |
 | Stack/callstack sanity checks | done as executable stack-window hits |
@@ -223,9 +224,9 @@ privileged container suite.
 
 | Item | Status |
 |---|---|
-| musl allocator backend | implement |
-| Go runtime allocator backend | implement |
-| arm64 support | implement |
+| musl allocator backend | deferred |
+| Go runtime allocator backend | deferred |
+| arm64 support | deferred |
 | Overhead benchmarks and sampling controls | done |
 | Long-running session backpressure/loss accounting | done |
 | Final packaging/docs/release artifacts | done |

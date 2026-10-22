@@ -65,6 +65,8 @@ type Session struct {
 	target     core.Target
 	resolver   *symbols.Resolver
 	resolverMu sync.RWMutex
+	regionMu   sync.Mutex
+	regionTS   time.Time
 	tracer     *debugger.Tracer
 	watcher    WatchController
 	bpf        *ebpf.Tracer
@@ -131,6 +133,10 @@ func (s *Session) pump() {
 			if !ok {
 				events = nil
 				continue
+			}
+			if (ev.Type == core.EventAlloc || ev.Type == core.EventFree) &&
+				ev.Addr != 0 && !s.model.Mapped(ev.Addr) {
+				s.refreshRegions(false)
 			}
 			s.broadcast("event", StreamEvent{Kind: "event", Event: &ev})
 			for _, f := range s.engine.Observe(ev) {
@@ -616,11 +622,31 @@ func (s *Session) heapRecipe(conn *transport.Conn, f *proto.Frame) {
 	s.reply(conn, f, r, nil)
 }
 
+func (s *Session) refreshRegions(force bool) {
+	s.regionMu.Lock()
+	if !force && time.Since(s.regionTS) < 100*time.Millisecond {
+		s.regionMu.Unlock()
+		return
+	}
+	s.regionTS = time.Now()
+	s.regionMu.Unlock()
+	maps, err := symbols.ReadMaps(s.target.PID)
+	if err != nil {
+		return
+	}
+	regions := make([]heap.Region, 0, len(maps))
+	for _, m := range maps {
+		regions = append(regions, heap.Region{Start: m.Start, End: m.End, Path: m.Path})
+	}
+	s.model.SetRegions(regions)
+}
+
 func (s *Session) mapsRefresh(conn *transport.Conn, f *proto.Frame) {
 	if err := s.RefreshResolver(); err != nil {
 		s.reply(conn, f, nil, &proto.Error{Code: "refresh_failed", Message: err.Error()})
 		return
 	}
+	s.refreshRegions(true)
 	r := s.getResolver()
 	mods := make([]string, 0, len(r.Modules))
 	for _, m := range r.Modules {

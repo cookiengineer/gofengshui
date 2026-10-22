@@ -21,6 +21,7 @@ const (
 	EventSyscallRet  EventType = 10
 	EventAllocFail   EventType = 11
 	EventStat        EventType = 12
+	EventOOM         EventType = 13
 	EventCrash       EventType = 100
 )
 
@@ -50,6 +51,8 @@ func (t EventType) String() string {
 		return "alloc_fail"
 	case EventStat:
 		return "stat"
+	case EventOOM:
+		return "oom"
 	case EventCrash:
 		return "crash"
 	default:
@@ -204,6 +207,8 @@ type Config struct {
 	// SampleStacks captures every Nth user stack (0/1 = every event). Must be
 	// a power of two.
 	SampleStacks uint32 `json:"sample_stacks,omitempty"`
+	// OOM enables kernel OOM tracepoint/kprobe capture.
+	OOM bool `json:"oom,omitempty"`
 }
 
 func DefaultConfig() Config {

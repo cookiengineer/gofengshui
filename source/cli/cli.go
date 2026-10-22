@@ -104,6 +104,7 @@ Flags for run/attach:
   --glibc-version    override detected glibc version (e.g. 2.31)
   --watch-freed      watch recently freed chunks for direct UAF writes
   --sample-stacks N  capture every Nth user stack (power of two)
+  --oom              enable kernel OOM tracepoint/kprobe capture
   --expect-findings  comma-separated detector IDs that must be present
   --expect-no-findings  fail if any finding is produced
   --expect-regs      validate sink registers (e.g. rdi=0x4141)
@@ -130,6 +131,7 @@ func configFlags(fs *flag.FlagSet) (*core.Config, *bool, *bool, *bool, *string, 
 		cfg.SampleStacks = uint32(n)
 		return nil
 	})
+	fs.BoolVar(&cfg.OOM, "oom", false, "enable kernel OOM tracepoint/kprobe capture")
 	pause := fs.Bool("pause", false, "pause before continuing the target")
 	jsonl := fs.Bool("jsonl", false, "serve JSONL protocol on stdin/stdout")
 	follow := fs.Bool("follow", false, "follow clone/fork/vfork")
