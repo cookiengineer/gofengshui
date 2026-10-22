@@ -64,10 +64,10 @@ func TestPredictTcacheOverflowFastbin(t *testing.T) {
 	if p.TcacheCount != 7 || len(p.Candidates) != 10 {
 		t.Fatalf("unexpected prediction: %#v", p)
 	}
-	// last 7 reversed, then older fastbin entries reversed
+	// first 7 frees fill tcache (newest first), the rest go to fastbin LIFO
 	want := []uint64{
-		0x1120, 0x1100, 0x10e0, 0x10c0, 0x10a0, 0x1080, 0x1060,
-		0x1040, 0x1020, 0x1000,
+		0x10c0, 0x10a0, 0x1080, 0x1060, 0x1040, 0x1020, 0x1000,
+		0x1120, 0x1100, 0x10e0,
 	}
 	for i, c := range p.Candidates {
 		if c.Addr != want[i] {
@@ -93,11 +93,11 @@ func TestPredictSmallbinFIFO(t *testing.T) {
 	if p.TcacheCount != 7 {
 		t.Fatalf("tcache count = %d", p.TcacheCount)
 	}
-	// tcache tail reversed, then older smallbin entries FIFO
-	if p.Candidates[0].Addr != 0x2000+9*0x90 {
+	// first 7 frees fill tcache (newest first); older chunks are smallbin FIFO
+	if p.Candidates[0].Addr != 0x2000+6*0x90 {
 		t.Fatalf("first candidate = 0x%x", p.Candidates[0].Addr)
 	}
-	if p.Candidates[7].Addr != 0x2000 || p.Candidates[7].Source != "smallbin-fifo" {
+	if p.Candidates[7].Addr != 0x2000+7*0x90 || p.Candidates[7].Source != "smallbin-fifo" {
 		t.Fatalf("first older candidate = %#v", p.Candidates[7])
 	}
 }
@@ -125,5 +125,42 @@ func TestPredictNoFreeChunks(t *testing.T) {
 	p := m.Predict(1, 0x18, 8)
 	if len(p.Candidates) != 0 || p.FreePool != 0 {
 		t.Fatalf("unexpected prediction: %#v", p)
+	}
+}
+
+func TestPredictRealChunkSizes(t *testing.T) {
+	m := NewModel()
+	ev := core.Event{
+		Timestamp: time.Unix(0, 1), Type: core.EventAlloc, PID: 1, TID: 7,
+		Addr: 0x1000, Size: 0x40, ReqSize: 0x38,
+	}
+	m.Apply(ev)
+	ev.Timestamp = time.Unix(0, 2)
+	ev.Type = core.EventFree
+	m.Apply(ev)
+	p := m.Predict(7, 0x38, 8)
+	if len(p.Candidates) != 1 || p.Candidates[0].Addr != 0x1000 {
+		t.Fatalf("expected real-size free to match prediction: %#v", p)
+	}
+}
+
+func TestPredictProfileAware(t *testing.T) {
+	m := NewModelWithProfile(mustProfile(t, "2.44"))
+	m.Apply(evAt(core.EventAlloc, 1, 0x1000, 0x20, 1))
+	m.Apply(evAt(core.EventFree, 1, 0x1000, 0x20, 2))
+	p := m.Predict(1, 0x18, 8)
+	if p.Glibc != "2.44" || !p.SafeLinking || !p.Tcache || p.TcacheCount != 1 {
+		t.Fatalf("unexpected profile in prediction: %#v", p)
+	}
+
+	old := NewModelWithProfile(mustProfile(t, "2.25"))
+	old.Apply(evAt(core.EventAlloc, 1, 0x1000, 0x20, 1))
+	old.Apply(evAt(core.EventFree, 1, 0x1000, 0x20, 2))
+	p = old.Predict(1, 0x18, 8)
+	if p.Glibc != "2.25" || p.SafeLinking || p.Tcache || p.TcacheCount != 0 {
+		t.Fatalf("unexpected no-tcache prediction: %#v", p)
+	}
+	if len(p.Candidates) != 1 || p.Candidates[0].Source != "fastbin-lifo" {
+		t.Fatalf("expected fastbin candidate: %#v", p)
 	}
 }

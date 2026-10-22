@@ -36,7 +36,7 @@ Rules:
   "pause":false,
   "follow":false,
   "config":{"heap":true,"syscalls":true,"uaf":true,"stacks":true,"detectors":true,
-            "no_libc":false,"no_ebpf":false}
+            "no_libc":false,"no_ebpf":false,"glibc_version":""}
 }}
 ```
 
@@ -85,10 +85,14 @@ Replay begins after `since`; live events follow. Event payloads:
 {"method":"maps.refresh","params":{"session":"s1"}}
 ```
 
-`heap.query` and `heap.snapshot` include an `analysis` object with size-class
-histograms, largest live/freed chunks, address gaps and address-reuse counts.
+`heap.query`, `heap.snapshot` and `heap.analyze` include a `profile` object
+with the detected glibc version and allocator capabilities, plus an `analysis`
+object with size-class histograms, largest live/freed chunks, address gaps and
+address-reuse counts. Set `config.glibc_version` (or CLI `--glibc-version`) to
+override detection.
 
-`heap.predict` returns likely next allocation addresses for a requested size.
+`heap.predict` returns likely next allocation addresses for a requested size,
+using the detected profile for tcache size/count, safe-linking and bin limits.
 `maps.refresh` rescans the target's `/proc/<pid>/maps`, making `dlopen`ed
 modules available to later symbol lookups.
 

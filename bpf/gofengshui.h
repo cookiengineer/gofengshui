@@ -35,7 +35,11 @@ enum gfs_alloc_op {
 #define GFS_F_STACKS   (1U << 3)
 #define GFS_F_DETECT   (1U << 4)
 
-#define GFS_AF_UNKNOWN (1U << 0)
+#define GFS_AF_UNKNOWN    (1U << 0)
+#define GFS_AF_LINK       (1U << 1)
+
+/* Default x86_64 tcache chunk-size ceiling (64 bins). */
+#define GFS_TCACHE_MAX_CHUNK 0x410
 
 /* x86_64 syscall numbers */
 #define GFS_NR_READ     0
@@ -111,6 +115,8 @@ struct gfs_event {
 	__u64 stack_id;
 	__u64 arg1;
 	__u64 arg2;
+	__u64 aux1;
+	__u64 aux2;
 	__u32 type;
 	__u32 pid;
 	__u32 tid;

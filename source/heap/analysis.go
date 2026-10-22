@@ -31,6 +31,7 @@ type Reuse struct {
 
 // Analysis is a heap-feng-shui oriented summary.
 type Analysis struct {
+	Profile     Profile           `json:"profile"`
 	Live        int               `json:"live"`
 	Freed       int               `json:"freed"`
 	SizeClasses []SizeClass       `json:"size_classes"`
@@ -45,7 +46,7 @@ func (m *Model) Analyze() Analysis {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	a := Analysis{}
+	a := Analysis{Profile: m.profile}
 	classes := make(map[uint64]*SizeClass)
 	var live []core.Allocation
 	for _, al := range m.allocs {

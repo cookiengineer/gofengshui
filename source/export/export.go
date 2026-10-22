@@ -46,7 +46,7 @@ type ROPReport interface {
 }
 
 // Report writes a human-readable summary.
-func Report(path, session string, target core.Target, stats heap.Stats, sink any, rop any, findings []core.Finding) error {
+func Report(path, session string, target core.Target, profile heap.Profile, stats heap.Stats, sink any, rop any, findings []core.Finding) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Go Heap FengShui report\n\n")
 	fmt.Fprintf(&b, "- Session: `%s`\n", session)
@@ -54,6 +54,7 @@ func Report(path, session string, target core.Target, stats heap.Stats, sink any
 	fmt.Fprintf(&b, "- Target PID: %d\n", target.PID)
 	fmt.Fprintf(&b, "- Executable: `%s`\n", target.ExePath)
 	fmt.Fprintf(&b, "- libc: `%s`\n", target.LibcPath)
+	fmt.Fprintf(&b, "- Allocator: %s (source: %s)\n", profile.String(), profile.Source)
 	fmt.Fprintf(&b, "- Allocations: %d (live %d, freed %d)\n", stats.Allocations, stats.Live, stats.Freed)
 	fmt.Fprintf(&b, "- Tombstones: %d\n", stats.Tombstones)
 	fmt.Fprintf(&b, "- mmap regions: %d\n\n", stats.Mappings)

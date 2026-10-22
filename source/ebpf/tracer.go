@@ -49,6 +49,8 @@ type bpfEvent struct {
 	StackID   uint64
 	Arg1      uint64
 	Arg2      uint64
+	Aux1      uint64
+	Aux2      uint64
 	Type      uint32
 	PID       uint32
 	TID       uint32
@@ -371,7 +373,7 @@ func (t *Tracer) readLoop() {
 
 func decodeEvent(raw []byte) (core.Event, error) {
 	var be bpfEvent
-	if len(raw) < 100 {
+	if len(raw) < 116 {
 		return core.Event{}, fmt.Errorf("short bpf event: %d", len(raw))
 	}
 	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &be); err != nil {
@@ -391,6 +393,8 @@ func decodeEvent(raw []byte) (core.Event, error) {
 		StackID:   int32(be.StackID),
 		Arg1:      be.Arg1,
 		Arg2:      be.Arg2,
+		Aux1:      be.Aux1,
+		Aux2:      be.Aux2,
 		Flags:     be.Flags,
 		Comm:      cString(be.Comm[:]),
 	}, nil

@@ -21,7 +21,9 @@ TESTBINS := $(BUILD_DIR)/testdata/alloc_loop \
             $(BUILD_DIR)/testdata/crash \
             $(BUILD_DIR)/testdata/threads \
             $(BUILD_DIR)/testdata/fork_exec \
-            $(BUILD_DIR)/testdata/backfill
+            $(BUILD_DIR)/testdata/backfill \
+            $(BUILD_DIR)/testdata/poison \
+            $(BUILD_DIR)/testdata/alloc_once
 
 .PHONY: all build generate bpf test test-c clean fmt vet
 

@@ -90,6 +90,7 @@ Flags for run/attach:
   --no-libc          disable libc uprobe attachment
   --no-ebpf          diagnostic: run ptrace only, without eBPF
   --backfill         scan the main heap when attaching (default true)
+  --glibc-version    override detected glibc version (e.g. 2.31)
   --expect-findings  comma-separated detector IDs that must be present
   --expect-no-findings  fail if any finding is produced
   --expect-regs      validate sink registers (e.g. rdi=0x4141)
@@ -106,6 +107,7 @@ func configFlags(fs *flag.FlagSet) (*core.Config, *bool, *bool, *bool, *string, 
 	fs.BoolVar(&cfg.NoLibc, "no-libc", false, "disable libc uprobe attachment")
 	fs.BoolVar(&cfg.NoEBPF, "no-ebpf", false, "diagnostic: run ptrace only, without eBPF")
 	fs.BoolVar(&cfg.Backfill, "backfill", true, "scan the main heap when attaching")
+	fs.StringVar(&cfg.GlibcVersion, "glibc-version", "", "override detected glibc version (e.g. 2.31)")
 	pause := fs.Bool("pause", false, "pause before continuing the target")
 	jsonl := fs.Bool("jsonl", false, "serve JSONL protocol on stdin/stdout")
 	follow := fs.Bool("follow", false, "follow clone/fork/vfork")
@@ -149,8 +151,8 @@ func cmdRun(args []string, mode string) error {
 	kill := mode == "spawn"
 	defer s.Close(kill)
 
-	fmt.Fprintf(os.Stderr, "gofengshui: session %s target pid=%d init_pid=%d cgroup=%d exe=%s libc=%s\n",
-		s.ID(), s.Target().PID, s.Target().InitPID, s.Target().CgroupID, s.Target().ExePath, s.Target().LibcPath)
+	fmt.Fprintf(os.Stderr, "gofengshui: session %s target pid=%d init_pid=%d cgroup=%d exe=%s libc=%s allocator=%s\n",
+		s.ID(), s.Target().PID, s.Target().InitPID, s.Target().CgroupID, s.Target().ExePath, s.Target().LibcPath, s.Model().Profile())
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

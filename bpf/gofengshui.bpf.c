@@ -127,7 +127,7 @@ static __always_inline __u64 gfs_chunk_size(__u64 addr, __u64 req)
 	if (size < 16 || size > (1ULL << 40))
 		return req;
 
-	return size - 8;
+	return size;
 }
 
 static __always_inline __u32 gfs_stack_id(struct pt_regs *ctx,
@@ -178,6 +178,24 @@ static __always_inline void gfs_alloc_return(struct pt_regs *ctx, __u32 op)
 	ev.stack_id = gfs_stack_id(ctx, cfg);
 	ev.arg1 = p->old_ptr;
 	ev.arg2 = op;
+
+	/*
+	 * After tcache_get() the returned chunk still holds the encoded next
+	 * pointer that was installed when it was freed. Read it so userspace
+	 * can validate the free-list link and detect poisoning.
+	 */
+	if (addr && ev.size >= 0x20 && ev.size <= GFS_TCACHE_MAX_CHUNK) {
+		__u64 next = 0;
+		__u64 key = 0;
+
+		if (!bpf_probe_read_user(&next, sizeof(next), (void *)addr)) {
+			ev.aux1 = next;
+			if (!bpf_probe_read_user(&key, sizeof(key),
+						 (void *)(addr + 8)))
+				ev.aux2 = key;
+			ev.flags |= GFS_AF_LINK;
+		}
+	}
 
 	a.addr = addr;
 	a.req_size = p->size;

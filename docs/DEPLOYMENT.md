@@ -78,6 +78,11 @@ to `build/logs/integration-*.log` and updates `build/logs/latest.log`. The
 container writes its own copy to `build/reports/integration.log`. Both include
 the eBPF verifier log when a program fails to load (`GFS_BPF_LOG=1`).
 
+The script also validates the allocator-profile reports on the host and fails
+the run if the detected profile or the `--glibc-version 2.31` override is
+missing. See `docs/DEVELOPMENT.md` for the unprivileged/privileged handoff,
+log locations, and failure triage.
+
 Inside the container, the same suite is:
 
 ```sh
@@ -89,6 +94,7 @@ Expected results:
 - double-free PoC emits a `D1` finding
 - UAF PoC emits a `D2` finding
 - overflow PoC emits a `D3` finding
+- tcache-poisoning PoC emits a `D7` finding
 - `gofengshui validate` reaches `gfs_sink` with `RDI=0x4141` and exports a
   verified ROP trace to `/reports/rop`
 

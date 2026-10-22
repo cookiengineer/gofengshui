@@ -91,6 +91,12 @@ func (o AllocOp) String() string {
 	}
 }
 
+// Event flags mirror the GFS_AF_* bits in bpf/gofengshui.h.
+const (
+	EventFlagUnknown    = 1 << 0
+	EventFlagTcacheLink = 1 << 1
+)
+
 // Event is a decoded ring-buffer record.
 type Event struct {
 	Timestamp time.Time `json:"ts"`
@@ -105,6 +111,8 @@ type Event struct {
 	StackID   int32     `json:"stack_id"`
 	Arg1      uint64    `json:"arg1"`
 	Arg2      uint64    `json:"arg2"`
+	Aux1      uint64    `json:"aux1"`
+	Aux2      uint64    `json:"aux2"`
 	Flags     uint32    `json:"flags"`
 	Comm      string    `json:"comm"`
 }
@@ -187,6 +195,8 @@ type Config struct {
 	NoEBPF bool `json:"no_ebpf"`
 	// Backfill scans the main heap when attaching to a running process.
 	Backfill bool `json:"backfill"`
+	// GlibcVersion overrides allocator profile detection (for example "2.31").
+	GlibcVersion string `json:"glibc_version,omitempty"`
 }
 
 func DefaultConfig() Config {

@@ -15,6 +15,51 @@ mkdir -p build/reports
 LOG="$LOG_DIR/integration-$(date +%Y%m%d-%H%M%S).log"
 ln -sfn "$LOG" "$LOG_DIR/latest.log"
 
+require_report_grep() {
+  local pattern="$1"
+  local file="$2"
+  local label="$3"
+  if grep -q -- "$pattern" "$file"; then
+    echo "ok: $label"
+  else
+    echo "FAIL: $label (pattern '$pattern' missing from $file)" >&2
+    return 1
+  fi
+}
+
+verify_profiles() {
+  local failed=0
+  local poison=build/reports/poison/heap.json
+  local override=build/reports/profile-override/heap.json
+  local stdio=build/reports/stdio.jsonl
+
+  echo "=== allocator profile assertions ==="
+  if [ ! -s "$poison" ]; then
+    echo "FAIL: missing $poison" >&2
+    failed=1
+  else
+    require_report_grep '"profile": {' "$poison" "heap.json has detected profile" || failed=1
+    require_report_grep '"source": "libc-string"' "$poison" "profile detected from libc metadata" || failed=1
+    require_report_grep '"tcache": true' "$poison" "detected profile enables tcache" || failed=1
+    require_report_grep '"safe_linking": true' "$poison" "detected profile enables safe-linking" || failed=1
+  fi
+  if [ ! -s "$override" ]; then
+    echo "FAIL: missing $override" >&2
+    failed=1
+  else
+    require_report_grep '"version": "2.31"' "$override" "override applied glibc 2.31" || failed=1
+    require_report_grep '"source": "override"' "$override" "override source recorded" || failed=1
+    require_report_grep '"safe_linking": false' "$override" "override disables safe-linking" || failed=1
+  fi
+  if [ ! -s "$stdio" ]; then
+    echo "FAIL: missing $stdio" >&2
+    failed=1
+  else
+    require_report_grep '"profile":{' "$stdio" "session.status exposes profile" || failed=1
+  fi
+  return "$failed"
+}
+
 {
   echo "=== gofengshui privileged integration ==="
   echo "started: $(date -Is)"
@@ -68,6 +113,11 @@ status=${PIPESTATUS[0]}
 set -e
 
 fix_reports
+profile_status=0
+verify_profiles 2>&1 | tee -a "$LOG" || profile_status=1
+if [ "$status" -eq 0 ] && [ "$profile_status" -ne 0 ]; then
+  status=1
+fi
 {
   echo
   echo "=== finished: $(date -Is) status=$status ==="

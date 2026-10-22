@@ -35,8 +35,8 @@ func TestEmbeddedObjectParses(t *testing.T) {
 }
 
 func TestStructSizesMatchC(t *testing.T) {
-	if got := binary.Size(bpfEvent{}); got != 100 {
-		t.Fatalf("bpfEvent size = %d, want 100", got)
+	if got := binary.Size(bpfEvent{}); got != 116 {
+		t.Fatalf("bpfEvent size = %d, want 116", got)
 	}
 	if got := binary.Size(bpfConfig{}); got != 24 {
 		t.Fatalf("bpfConfig size = %d, want 24", got)

@@ -23,7 +23,7 @@ kernels with BTF, uprobes, ringbuf and `CAP_BPF`/`CAP_PERFMON`/
 Makefile
 bpf/                     eBPF C sources and headers
 build/                   all build artefacts (BPF objects, binary, reports)
-docs/                    plan, tasks, protocol, deployment
+docs/                    plan, tasks, protocol, deployment, development workflow
 source/                  all Go and test-harness source code
   cmd/gofengshui/        command-line entry point
   agent/                 session manager and request handling
@@ -126,12 +126,16 @@ Allocation {
   controlled-RIP candidate flag).
 - Heap analysis: size-class histogram, largest live/freed chunks, address
   gaps and address reuse.
-- Allocation prediction: glibc request2size, per-thread tcache LIFO,
-  fastbin LIFO and smallbin FIFO candidate ordering.
+- Allocator profiles: detect glibc 2.26–2.44 behavior from the target libc
+  (`tcache`, safe-linking, tcache key, bin limits) with an explicit override.
+- Allocation prediction: profile-driven glibc request2size, per-thread tcache
+  LIFO (first 7 frees), fastbin LIFO and smallbin FIFO candidate ordering.
 - Attach-time main-heap backfill, dlopen resolver refresh, stdio protocol
   validation, software breakpoints, allocation-ID watch, and CLI CI
   expectations all verified in the privileged suite.
-- D7 allocator metadata anomalies (later).
+- D7 tcache free-list link anomalies: the BPF allocator return probe records a
+  popped chunk's encoded `next` word; Go decodes safe-linking and flags links
+  that leave the tracked free list or mapped memory.
 
 ### Sink and ROP validation
 
@@ -245,6 +249,8 @@ in `source/`.
 - User stack depth needs frame pointers; test harnesses use
   `-fno-omit-frame-pointer`.
 - Multi-thread precision is limited in v1.
+- D7 can report a medium-severity link for tcache neighbors that were freed
+  before an attach session started; spawn mode has a complete free history.
 - ASLR and scheduling limit determinism; use relative offsets and recorded
   baselines.
 - The agent is root-equivalent and belongs in a sandboxed CTF/CI environment.
@@ -258,6 +264,8 @@ Implemented and locally tested:
 - repository/build pipeline and embedded BPF object generation
 - glibc allocator uprobes and raw syscall tracing source
 - heap model, tombstones, D1/D2/D3 findings
+- glibc allocator profiles, safe-linking-aware prediction and D7 tcache link
+  anomaly detection
 - JSONL protocol, stdio and unix transports
 - ptrace launch/attach, pause/resume, registers, memory, single-step,
   hardware break/watchpoint installation

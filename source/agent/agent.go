@@ -149,7 +149,7 @@ func (a *Agent) Start(p CreateParams) (*Session, error) {
 	}
 	cfg := p.Config
 	if !cfg.Heap && !cfg.Syscalls && !cfg.UAF && !cfg.Stacks && !cfg.Detectors &&
-		!cfg.NoEBPF && !cfg.NoLibc {
+		!cfg.NoEBPF && !cfg.NoLibc && cfg.GlibcVersion == "" {
 		cfg = core.DefaultConfig()
 	}
 	s, err := a.createSession(p, cfg)
@@ -274,6 +274,26 @@ func (a *Agent) createSession(p CreateParams, cfg core.Config) (*Session, error)
 		cfg.CgroupID = target.CgroupID
 	}
 	s.cfg = cfg
+
+	profile := heap.DefaultProfile()
+	if cfg.GlibcVersion != "" {
+		p, ok := heap.ProfileForVersion(cfg.GlibcVersion)
+		if !ok {
+			_ = s.tracer.Kill()
+			return nil, fmt.Errorf("invalid glibc version %q", cfg.GlibcVersion)
+		}
+		profile = p
+	} else {
+		profile = heap.DetectProfile(s.tracer.PID(), target.LibcPath)
+	}
+	s.model.SetProfile(profile)
+	if maps, mapErr := symbols.ReadMaps(s.tracer.PID()); mapErr == nil {
+		regions := make([]heap.Region, 0, len(maps))
+		for _, mm := range maps {
+			regions = append(regions, heap.Region{Start: mm.Start, End: mm.End, Path: mm.Path})
+		}
+		s.model.SetRegions(regions)
+	}
 
 	if p.Mode == "attach" && cfg.Backfill {
 		s.backfillHeap()

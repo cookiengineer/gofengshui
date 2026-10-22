@@ -38,6 +38,14 @@ type pendingMmap struct {
 	tid   uint32
 }
 
+// Region is a mapped address range used to classify corrupted free-list
+// targets.
+type Region struct {
+	Start uint64 `json:"start"`
+	End   uint64 `json:"end"`
+	Path  string `json:"path,omitempty"`
+}
+
 // Model is a concurrency-safe heap timeline and range index.
 type Model struct {
 	mu sync.RWMutex
@@ -53,11 +61,19 @@ type Model struct {
 	tombs   map[uint64]Tombstone
 	mmaps   map[uint64]Mmap
 	pending map[uint32]pendingMmap
+	regions []Region
+	profile Profile
+	hasMaps bool
 
 	findings []core.Finding
 }
 
 func NewModel() *Model {
+	return NewModelWithProfile(DefaultProfile())
+}
+
+// NewModelWithProfile creates a model using the given allocator profile.
+func NewModelWithProfile(p Profile) *Model {
 	return &Model{
 		allocs:  make(map[uint64]*core.Allocation),
 		byID:    make(map[uint64]*core.Allocation),
@@ -67,7 +83,31 @@ func NewModel() *Model {
 		tombs:   make(map[uint64]Tombstone),
 		mmaps:   make(map[uint64]Mmap),
 		pending: make(map[uint32]pendingMmap),
+		profile: p,
 	}
+}
+
+// SetProfile replaces the allocator profile. Callers should do this before
+// events are folded into the model.
+func (m *Model) SetProfile(p Profile) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.profile = p
+}
+
+// Profile returns the active allocator profile.
+func (m *Model) Profile() Profile {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.profile
+}
+
+// SetRegions records the target's mapped address ranges.
+func (m *Model) SetRegions(regions []Region) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.regions = append([]Region(nil), regions...)
+	m.hasMaps = true
 }
 
 // Apply folds one event into the model and returns any new findings.
@@ -80,7 +120,7 @@ func (m *Model) Apply(ev core.Event) []core.Finding {
 
 	switch ev.Type {
 	case core.EventAlloc:
-		m.applyAlloc(ev)
+		out = append(out, m.applyAlloc(ev)...)
 	case core.EventAllocFail:
 		m.findings = append(m.findings, core.Finding{
 			ID:        "D4",
@@ -107,7 +147,7 @@ func (m *Model) Apply(ev core.Event) []core.Finding {
 		// to a running process: the allocation may simply predate the
 		// session. Keep the raw event, but only raise a finding when the
 		// allocator-side event was not marked unknown.
-		if ev.Flags&1 == 0 {
+		if ev.Flags&core.EventFlagUnknown == 0 {
 			f := core.Finding{
 				ID:        "D1",
 				Severity:  "medium",
@@ -137,9 +177,9 @@ func (m *Model) Apply(ev core.Event) []core.Finding {
 	return out
 }
 
-func (m *Model) applyAlloc(ev core.Event) {
+func (m *Model) applyAlloc(ev core.Event) []core.Finding {
 	if ev.Addr == 0 {
-		return
+		return nil
 	}
 	if ev.Size == 0 {
 		ev.Size = ev.ReqSize
@@ -160,14 +200,76 @@ func (m *Model) applyAlloc(ev core.Event) {
 		Generation:  m.nextID,
 		LastEventID: m.seq,
 	}
-	m.consumeFree(ev.Addr)
+	entry, pooled := m.consumeFree(ev.Addr)
 	m.allocs[a.Addr] = a
 	m.byID[a.ID] = a
 	m.reuses[a.Addr]++
+
+	if pooled && entry.Tcache {
+		return m.checkTcacheLink(ev, entry, a)
+	}
+	return nil
+}
+
+// checkTcacheLink validates the decoded tcache next pointer of a chunk that
+// glibc just popped from tcache. A chunk's next field still holds the old head
+// after tcache_get, so corruption of that field is visible at allocation time.
+func (m *Model) checkTcacheLink(ev core.Event, entry freeEntry, a *core.Allocation) []core.Finding {
+	if !m.profile.Tcache || ev.Flags&core.EventFlagTcacheLink == 0 {
+		return nil
+	}
+	raw := ev.Aux1
+	decoded := raw
+	if m.profile.SafeLinking {
+		decoded = raw ^ (ev.Addr >> 12)
+	}
+	if decoded == 0 {
+		return nil
+	}
+
+	severity := "medium"
+	class := "unexpected tcache link"
+	if decoded%16 != 0 {
+		severity = "high"
+		class = "unaligned tcache link"
+	} else if k, ok := m.freeLoc[decoded]; ok && k.Chunk == ev.Size && k.TID == entry.TID {
+		return nil
+	} else if m.hasMaps && !m.addressMapped(decoded) {
+		severity = "high"
+		class = "tcache link outside mapped memory"
+	}
+
+	evCopy := ev
+	return []core.Finding{{
+		ID:         "D7",
+		Severity:   severity,
+		Message:    fmt.Sprintf("%s: tcache next 0x%x decoded to 0x%x", class, raw, decoded),
+		Event:      &evCopy,
+		Allocation: a,
+		Timestamp:  ev.Timestamp,
+		Details: map[string]any{
+			"raw":          raw,
+			"decoded":      decoded,
+			"safe_linking": m.profile.SafeLinking,
+			"glibc":        m.profile.Version,
+			"chunk_size":   ev.Size,
+			"tid":          entry.TID,
+			"taint":        class,
+		},
+	}}
+}
+
+func (m *Model) addressMapped(addr uint64) bool {
+	for _, r := range m.regions {
+		if addr >= r.Start && addr < r.End {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Model) applyFree(ev core.Event, double bool) {
-	if ev.Flags&1 != 0 && m.allocs[ev.Addr] == nil {
+	if ev.Flags&core.EventFlagUnknown != 0 && m.allocs[ev.Addr] == nil {
 		// Unknown pointer after attach: do not fabricate a tombstone.
 		return
 	}
@@ -431,6 +533,8 @@ func (m *Model) Reset() {
 	m.tombs = make(map[uint64]Tombstone)
 	m.mmaps = make(map[uint64]Mmap)
 	m.pending = make(map[uint32]pendingMmap)
+	m.regions = nil
+	m.hasMaps = false
 	m.findings = nil
 	m.nextID = 0
 	m.seq = 0

@@ -45,6 +45,25 @@ grep -q '"id":"D3"' /reports/overflow.events.jsonl
 grep -q 'heap overflow' /reports/overflow/report.md
 echo "D3 overflow finding observed"
 
+echo "== tcache poisoning / safe-linking anomaly =="
+timeout 30s gofengshui run --report /reports/poison --expect-findings D7 \
+  --stdout /reports/poison.stdout \
+  --stderr /reports/poison.stderr \
+  -- /opt/gfs/testdata/poison \
+  > /reports/poison.events.jsonl
+grep -q '"id":"D7"' /reports/poison.events.jsonl
+grep -q 'tcache' /reports/poison/report.md
+
+GLIBC_VERSION=$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}')
+if [ -z "$GLIBC_VERSION" ]; then
+  GLIBC_VERSION=$(ldd --version | awk 'NR == 1 {print $NF}')
+fi
+grep -q "\"version\": \"$GLIBC_VERSION\"" /reports/poison/heap.json
+grep -q '"source": "libc-string"' /reports/poison/heap.json
+grep -q '"tcache": true' /reports/poison/heap.json
+grep -q '"safe_linking": true' /reports/poison/heap.json
+echo "D7 tcache link anomaly observed; detected glibc $GLIBC_VERSION profile"
+
 echo "== allocation failure / OOM =="
 timeout 30s gofengshui run --report /reports/alloc_fail --expect-findings D4 \
   --stdout /reports/alloc_fail.stdout \
@@ -83,6 +102,19 @@ grep -q 'No findings recorded' /reports/clean/report.md
 grep -q '"analysis"' /reports/clean/heap.json
 grep -q '"size_classes"' /reports/clean/heap.json
 echo "no false-positive findings on clean malloc/free loop; heap analysis exported"
+
+echo "== allocator profile override =="
+timeout 30s gofengshui run --glibc-version 2.31 \
+  --report /reports/profile-override --expect-no-findings \
+  --stdout /reports/profile-override.stdout \
+  --stderr /reports/profile-override.stderr \
+  -- /opt/gfs/testdata/alloc_once \
+  > /reports/profile-override.events.jsonl
+grep -q '"version": "2.31"' /reports/profile-override/heap.json
+grep -q '"source": "override"' /reports/profile-override/heap.json
+grep -q '"tcache": true' /reports/profile-override/heap.json
+grep -q '"safe_linking": false' /reports/profile-override/heap.json
+echo "glibc 2.31 profile override applied end-to-end"
 
 echo "== multithread allocation =="
 timeout 30s gofengshui run --follow --report /reports/threads --expect-no-findings \
@@ -159,12 +191,15 @@ printf '%s\n' \
   '{"v":1,"type":"request","id":2,"method":"resume","params":{}}' \
   '{"v":1,"type":"request","id":3,"method":"wait","params":{"type":"finding","id":"D2","timeout_ms":10000}}' \
   '{"v":1,"type":"request","id":4,"method":"assert","params":{"assertions":[{"type":"finding","id":"D2","min_count":1}]}}' \
+  '{"v":1,"type":"request","id":5,"method":"session.status","params":{}}' \
   | timeout 30s gofengshui run --jsonl --pause -- /opt/gfs/testdata/uaf \
   > /reports/stdio.jsonl
 grep -q '"id":"D2"' /reports/stdio.jsonl
 grep -q '"type":"result","id":3' /reports/stdio.jsonl
 grep -q '"type":"result","id":4,"result":{"ok":true' /reports/stdio.jsonl
-echo "stdio JSONL session + D2 event + wait/assert results verified"
+grep -q '"type":"result","id":5' /reports/stdio.jsonl
+grep -q '"profile":{' /reports/stdio.jsonl
+echo "stdio JSONL session + D2 event + wait/assert + profile status verified"
 
 echo "== rop sink =="
 timeout 30s gofengshui validate --report /reports/rop --expect-regs rdi=0x4141 \

@@ -80,6 +80,8 @@ Status legend: `yes`, `partial`, `no`. Updated incrementally during work.
 | M3.14 | Tcache/free-list reuse prediction (`heap.predict`) | yes | yes | yes |
 | M3.15 | Attach-time main-heap backfill | yes | yes | yes |
 | M3.16 | CLI CI expectations (`--expect-findings`, `--expect-no-findings`, `--expect-regs`) | yes | yes | yes |
+| M3.17 | glibc allocator profile detection and `--glibc-version` override | yes | yes | partial |
+| M3.18 | D7 tcache free-list link / safe-linking anomaly detector | yes | yes | partial |
 
 ## Privileged Integration Result (2026-10-22)
 
@@ -132,6 +134,8 @@ Privileged suite passed with status 0:
 - tcache overflow into fastbin LIFO
 - smallbin FIFO ordering
 - per-thread isolation and `tid: 0` merging
+- glibc profile detection and safe-linking-aware decoding
+- tcache fills with the first seven frees, then fastbin LIFO
 
 It is a userspace model based on observed free/alloc events, not a direct read
 of glibc's tcache or arena structures.
@@ -141,6 +145,7 @@ of glibc's tcache or arena structures.
 - `yes` under Tested means covered by an automated or executed local check.
 - `yes` under Verified means observed end-to-end in the relevant environment.
 - Implemented-but-not-fully-verified items:
+  - D7 tcache link detection is unit-tested and wired into the privileged suite; the next privileged rerun is pending.
   - M1.14 stdio end-to-end session driving
   - M1.17 event replay/cursor edge cases
   - M2.6 software-breakpoint trigger path
@@ -168,8 +173,8 @@ of glibc's tcache or arena structures.
 | Item | Status |
 |---|---|
 | Direct tcache/main_arena/bin introspection | implement |
-| Allocator-version profiles (glibc 2.31–2.44) | implement |
-| tcache poisoning / safe-linking anomaly detector (D7) | implement |
+| Allocator-version profiles (glibc 2.26–2.44) | done |
+| tcache poisoning / safe-linking anomaly detector (D7) | done |
 | Realloc-style free sequences in predictor | improve |
 | C++ new/delete symbol-specific probes | implement |
 | Better separation of per-arena vs per-thread bins | improve |

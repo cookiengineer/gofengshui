@@ -394,6 +394,7 @@ func (s *Session) status(conn *transport.Conn, f *proto.Frame) {
 		"session":   s.id,
 		"target":    s.target,
 		"config":    s.cfg,
+		"profile":   s.model.Profile(),
 		"stats":     s.model.Stats(),
 		"backfill":  backfill,
 		"last_stop": last,
@@ -438,6 +439,7 @@ func (s *Session) heapQuery(conn *transport.Conn, f *proto.Frame) {
 		"tombstones":  s.model.Tombstones(),
 		"mappings":    s.model.Mappings(),
 		"stats":       s.model.Stats(),
+		"profile":     s.model.Profile(),
 		"analysis":    s.model.Analyze(),
 	}, nil)
 }
@@ -475,6 +477,7 @@ func (s *Session) heapSnapshot(conn *transport.Conn, f *proto.Frame) {
 		"tombstones":  s.model.Tombstones(),
 		"mappings":    s.model.Mappings(),
 		"stats":       s.model.Stats(),
+		"profile":     s.model.Profile(),
 		"analysis":    s.model.Analyze(),
 		"findings":    s.engine.Recent(),
 	}, nil)
@@ -1036,6 +1039,7 @@ func (s *Session) Export(dir string) error {
 		"tombstones":  s.model.Tombstones(),
 		"mappings":    s.model.Mappings(),
 		"stats":       s.model.Stats(),
+		"profile":     s.model.Profile(),
 		"analysis":    s.model.Analyze(),
 		"backfill":    backfill,
 		"findings":    s.engine.Recent(),
@@ -1049,12 +1053,13 @@ func (s *Session) Export(dir string) error {
 	}
 	if err := export.JSON(filepath.Join(dir, "summary.json"), map[string]any{
 		"session": s.id, "target": s.target, "config": s.cfg,
-		"stats": s.model.Stats(), "sink": sink, "rop": rop,
+		"profile": s.model.Profile(),
+		"stats":   s.model.Stats(), "sink": sink, "rop": rop,
 		"markers": markers, "backfill": backfill,
 	}); err != nil {
 		return err
 	}
-	return export.Report(filepath.Join(dir, "report.md"), s.id, s.target, s.model.Stats(), sink, rop, s.engine.Recent())
+	return export.Report(filepath.Join(dir, "report.md"), s.id, s.target, s.model.Profile(), s.model.Stats(), sink, rop, s.engine.Recent())
 }
 
 // WaitStop waits for a ptrace stop matching pred.
