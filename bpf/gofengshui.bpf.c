@@ -45,6 +45,13 @@ struct {
 } pending_sys SEC(".maps");
 
 struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 8192);
+	__type(key, __u32);
+	__type(value, __u32);
+} cxx_op SEC(".maps");
+
+struct {
 	__uint(type, BPF_MAP_TYPE_STACK_TRACE);
 	__uint(max_entries, 16384);
 	__uint(key_size, sizeof(__u32));
@@ -57,6 +64,13 @@ struct {
 	__type(key, __u32);
 	__type(value, struct gfs_stats);
 } stats SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u64);
+} sample_ctr SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
@@ -144,6 +158,17 @@ static __always_inline __u32 gfs_stack_id(struct pt_regs *ctx,
 {
 	if (!cfg || !(cfg->flags & GFS_F_STACKS))
 		return 0;
+	if (cfg->sample > 1) {
+		__u32 key = 0;
+		__u64 *ctr = bpf_map_lookup_elem(&sample_ctr, &key);
+
+		if (ctr) {
+			__u64 n = __sync_fetch_and_add(ctr, 1);
+
+			if (n & (cfg->sample - 1))
+				return 0;
+		}
+	}
 	return bpf_get_stackid(ctx, &stacks, BPF_F_USER_STACK);
 }
 
@@ -186,6 +211,10 @@ static __always_inline void gfs_alloc_return(struct pt_regs *ctx, __u32 op)
 	p = bpf_map_lookup_elem(&pending, &tid);
 	if (!p)
 		return;
+
+	__u32 *cxx = bpf_map_lookup_elem(&cxx_op, &tid);
+	if (cxx && *cxx == GFS_OP_NEW)
+		op = GFS_OP_NEW;
 
 	addr = PT_REGS_RC(ctx);
 	gfs_init(&ev, addr ? GFS_EV_ALLOC : GFS_EV_ALLOC_FAIL);
@@ -262,6 +291,9 @@ static __always_inline int gfs_free_common(struct pt_regs *ctx, __u32 op)
 
 	a = bpf_map_lookup_elem(&allocs, &addr);
 	__u32 live = a && a->state;
+	__u32 *cxx = bpf_map_lookup_elem(&cxx_op, &tid);
+	if (cxx && *cxx == GFS_OP_DELETE)
+		op = GFS_OP_DELETE;
 
 	if (!a) {
 		type = GFS_EV_INVALID_FREE;
@@ -300,7 +332,7 @@ static __always_inline int gfs_free_common(struct pt_regs *ctx, __u32 op)
 	}
 
 	ev.stack_id = gfs_stack_id(ctx, cfg);
-	ev.arg1 = GFS_OP_FREE;
+	ev.arg1 = op;
 	ev.arg2 = 0;
 	if (!a)
 		ev.flags |= GFS_AF_UNKNOWN;
@@ -376,6 +408,50 @@ SEC("uprobe/free")
 int gfs_free_enter(struct pt_regs *ctx)
 {
 	return gfs_free_common(ctx, GFS_OP_FREE);
+}
+
+SEC("uprobe/_Znwm")
+int gfs_new_enter(struct pt_regs *ctx)
+{
+	struct gfs_config *cfg = gfs_cfg();
+	__u32 tid = bpf_get_current_pid_tgid();
+	__u32 op = GFS_OP_NEW;
+
+	if (!cfg || !(cfg->flags & GFS_F_HEAP))
+		return 0;
+	bpf_map_update_elem(&cxx_op, &tid, &op, BPF_ANY);
+	return 0;
+}
+
+SEC("uretprobe/_Znwm")
+int gfs_new_return(struct pt_regs *ctx)
+{
+	__u32 tid = bpf_get_current_pid_tgid();
+
+	bpf_map_delete_elem(&cxx_op, &tid);
+	return 0;
+}
+
+SEC("uprobe/_ZdlPv")
+int gfs_delete_enter(struct pt_regs *ctx)
+{
+	struct gfs_config *cfg = gfs_cfg();
+	__u32 tid = bpf_get_current_pid_tgid();
+	__u32 op = GFS_OP_DELETE;
+
+	if (!cfg || !(cfg->flags & GFS_F_HEAP))
+		return 0;
+	bpf_map_update_elem(&cxx_op, &tid, &op, BPF_ANY);
+	return 0;
+}
+
+SEC("uretprobe/_ZdlPv")
+int gfs_delete_return(struct pt_regs *ctx)
+{
+	__u32 tid = bpf_get_current_pid_tgid();
+
+	bpf_map_delete_elem(&cxx_op, &tid);
+	return 0;
 }
 
 static __always_inline int gfs_read_reg(struct pt_regs *regs, __u64 *out,

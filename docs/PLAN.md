@@ -145,6 +145,8 @@ Allocation {
   that leave the tracked free list or mapped memory.
 - D8 chunk metadata corruption: BPF records the chunk and next-chunk size words
   at free() entry; Go validates alignment, bounds and PREV_INUSE.
+- D9 size-field mismatch: the free-time header size is compared with the size
+  recorded at allocation, catching valid-looking size overwrites.
 
 ### Sink and ROP validation
 
@@ -280,9 +282,11 @@ Implemented and locally tested:
 - live hardware watchpoints on heap-model allocation IDs
 - opt-in automatic write watchpoints on recently freed chunks (`--watch-freed`)
 - D8 chunk/next-chunk metadata validation at free() entry
+- D9 allocated-vs-free chunk size consistency checks
 - direct UAF writes caught by freed-chunk auto-watchpoints
-- ringbuf/drop accounting and model overhead benchmarks
+- ringbuf/drop accounting, stack sampling controls and model benchmarks
 - dlopen rescan with per-thread allocator probe reattachment (`maps.refresh`)
+- C++ new/delete labelling for libstdc++ allocations
 - attach-time thread-arena backfill with heap_info validation
 - D6 fault-address classification and stack-window summary via ptrace
 - D2 checks for openat/execve paths and sendfile/splice offset pointers
@@ -303,7 +307,7 @@ Privileged end-to-end verification (2026-10-22):
 - D1 double-free, D2 UAF and D3 heap overflow observed on live targets
 - D7 tcache link anomaly observed on glibc 2.39; allocator detection and an
   explicit 2.31 override verified end-to-end
-- D8 metadata corruption detected before glibc aborts
+- D8 metadata corruption and D9 size overwrites detected at free() entry
 - D6 fault address/classification, crash stack hits, and D2 checks across
   openat/execve/sendfile/splice verified end-to-end
 - realloc churn, baseline diff and spray recipe verified end-to-end
@@ -312,6 +316,5 @@ Privileged end-to-end verification (2026-10-22):
 
 Deferred:
 
-- C++ new/delete-specific uprobes (libc malloc/free already covers most)
 - full multi-thread debug-register inheritance
 - tcache/main_arena introspection, musl/Go backends

@@ -23,7 +23,7 @@ Status legend: `yes`, `partial`, `no`. Updated incrementally during work.
 |---|---|---|---|---|
 | M1.1 | glibc allocator uprobes (malloc/calloc/realloc/free) | yes | yes | yes |
 | M1.2 | Chunk-header size measurement from BPF | yes | yes | yes |
-| M1.3 | C++ new/delete uprobes | no | no | no |
+| M1.3 | C++ new/delete uprobes | yes | yes | yes |
 | M1.4 | Raw syscall tracing (mmap/munmap/brk/mremap/read/write) | yes | yes | yes |
 | M1.5 | ELF symbol and `/proc/<pid>/maps` resolver | yes | yes | yes |
 | M1.6 | Container filtering (cgroup ID, PID-namespace-safe) | yes | yes | yes |
@@ -86,6 +86,7 @@ Status legend: `yes`, `partial`, `no`. Updated incrementally during work.
 | M3.20 | Realloc-aware heap timeline (moved and in-place) | yes | yes | yes |
 | M3.21 | Baseline diff + spray recipe (`heap.baseline`/`diff`/`recipe`) | yes | yes | yes |
 | M3.22 | D8 chunk/next-chunk metadata corruption detector | yes | yes | yes |
+| M3.24 | D9 allocated-vs-free chunk size mismatch detector | yes | yes | yes |
 | M3.23 | Automatic freed-chunk write watchpoints (`--watch-freed`) | yes | yes | yes |
 
 ## Privileged Integration Result (2026-10-22)
@@ -110,6 +111,7 @@ All checks passed with status 0:
 - thread-arena attach backfill, D8 metadata detection, and direct-UAF auto-watch verified
 - BPF event/drop accounting verified with `drops: 0`
 - dlopen rescan and allocator probe reattachment verified
+- C++ new/delete labelling and D9 size-mismatch detection verified
 - clean malloc/free loop with zero false positives
 - heap analysis export
 - multi-thread allocations from 5 threads
@@ -185,7 +187,7 @@ of glibc's tcache or arena structures.
 | Allocator-version profiles (glibc 2.26–2.44) | done |
 | tcache poisoning / safe-linking anomaly detector (D7) | done |
 | Realloc-style free sequences in predictor | done |
-| C++ new/delete symbol-specific probes | implement |
+| C++ new/delete symbol-specific probes | done |
 | Better separation of per-arena vs per-thread bins | improve |
 | Baseline comparison and spray recipe export | done |
 
@@ -197,7 +199,7 @@ of glibc's tcache or arena structures.
 | Fault address via `PTRACE_GETSIGINFO` | done |
 | Additional syscall buffers (`openat`, `execve`, `sendfile`, `splice`) | done |
 | Stack/callstack sanity checks | done as executable stack-window hits |
-| Type-confusion and heap-metadata corruption heuristics | D8 implemented; further heuristics research |
+| Type-confusion and heap-metadata corruption heuristics | D8/D9 implemented; further heuristics research |
 | Race/TOCTOU signal correlation | research |
 
 ### P3 — Portability and performance
@@ -207,6 +209,6 @@ of glibc's tcache or arena structures.
 | musl allocator backend | implement |
 | Go runtime allocator backend | implement |
 | arm64 support | implement |
-| Overhead benchmarks and sampling controls | benchmarks added; sampling controls pending |
+| Overhead benchmarks and sampling controls | done |
 | Long-running session backpressure/loss accounting | done |
 | Final packaging/docs/release artifacts | implement |

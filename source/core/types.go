@@ -201,6 +201,9 @@ type Config struct {
 	GlibcVersion string `json:"glibc_version,omitempty"`
 	// WatchFreed arms hardware write watchpoints on recently freed chunks.
 	WatchFreed bool `json:"watch_freed,omitempty"`
+	// SampleStacks captures every Nth user stack (0/1 = every event). Must be
+	// a power of two.
+	SampleStacks uint32 `json:"sample_stacks,omitempty"`
 }
 
 func DefaultConfig() Config {

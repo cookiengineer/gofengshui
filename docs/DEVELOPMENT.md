@@ -29,6 +29,12 @@ make build       # static build/gofengshui
 make bench       # heap-model benchmarks with allocation stats
 ```
 
+Stack capture can be sampled on busy targets:
+
+```sh
+gofengshui run --sample-stacks 4 -- ./target
+```
+
 Useful diagnostic runs that do not require BPF privileges:
 
 ```sh
@@ -97,10 +103,13 @@ allocator profile end-to-end:
 - `arena_backfill` recovers allocations from non-main thread arenas during
   attach
 - `metadata` corrupts a chunk size and triggers `D8` at free() entry
+- `size_swap` replaces a size with a valid-looking value and triggers `D9`
 - `uaf_direct` writes to a freed chunk without a syscall and triggers D2
   through `--watch-freed`
 - `dlopen_alloc` loads a plugin, refreshes maps/probes, and allocates again
   after `maps.refresh`
+- `cxx_alloc` allocates through libstdc++ and emits `new`/`delete` labelled
+  events
 - `deploy/run-integration.sh` re-checks these report fields on the host and
   fails the run if they are missing
 

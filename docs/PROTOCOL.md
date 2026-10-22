@@ -36,7 +36,7 @@ Rules:
   "pause":false,
   "follow":false,
   "config":{"heap":true,"syscalls":true,"uaf":true,"stacks":true,"detectors":true,
-            "no_libc":false,"no_ebpf":false,"glibc_version":"","watch_freed":false}
+            "no_libc":false,"no_ebpf":false,"glibc_version":"","watch_freed":false,"sample_stacks":0}
 }}
 ```
 

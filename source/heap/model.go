@@ -340,6 +340,27 @@ func (m *Model) checkMetadata(ev core.Event) []core.Finding {
 		return nil
 	}
 	rawSize := ev.Aux1 &^ 7
+	var out []core.Finding
+	evCopy := ev
+	if a := m.allocs[ev.Addr]; a != nil && a.ChunkSize != 0 && rawSize != a.ChunkSize {
+		ac := *a
+		out = append(out, core.Finding{
+			ID:         "D9",
+			Severity:   "high",
+			Message:    fmt.Sprintf("chunk size changed while allocated at 0x%x: expected=0x%x actual=0x%x", ev.Addr, a.ChunkSize, rawSize),
+			Event:      &evCopy,
+			Allocation: &ac,
+			Timestamp:  ev.Timestamp,
+			Details: map[string]any{
+				"allocation_id": a.ID,
+				"expected_size": a.ChunkSize,
+				"actual_size":   rawSize,
+				"raw_size":      ev.Aux1,
+				"glibc":         m.profile.Version,
+			},
+		})
+	}
+
 	var problem string
 	switch {
 	case rawSize < 0x20 || rawSize%16 != 0 || rawSize > 1<<40:
@@ -352,25 +373,24 @@ func (m *Model) checkMetadata(ev core.Event) []core.Finding {
 			problem = "next chunk PREV_INUSE cleared"
 		}
 	}
-	if problem == "" {
-		return nil
+	if problem != "" {
+		out = append(out, core.Finding{
+			ID:        "D8",
+			Severity:  "high",
+			Message:   fmt.Sprintf("%s at 0x%x: size=0x%x next=0x%x", problem, ev.Addr, rawSize, ev.Aux2),
+			Event:     &evCopy,
+			Timestamp: ev.Timestamp,
+			Details: map[string]any{
+				"raw_size":   ev.Aux1,
+				"size":       rawSize,
+				"next_raw":   ev.Aux2,
+				"next_size":  ev.Aux2 &^ 7,
+				"prev_inuse": ev.Aux2&1 != 0,
+				"glibc":      m.profile.Version,
+			},
+		})
 	}
-	evCopy := ev
-	return []core.Finding{{
-		ID:        "D8",
-		Severity:  "high",
-		Message:   fmt.Sprintf("%s at 0x%x: size=0x%x next=0x%x", problem, ev.Addr, rawSize, ev.Aux2),
-		Event:     &evCopy,
-		Timestamp: ev.Timestamp,
-		Details: map[string]any{
-			"raw_size":   ev.Aux1,
-			"size":       rawSize,
-			"next_raw":   ev.Aux2,
-			"next_size":  ev.Aux2 &^ 7,
-			"prev_inuse": ev.Aux2&1 != 0,
-			"glibc":      m.profile.Version,
-		},
-	}}
+	return out
 }
 
 func (m *Model) applyMmapRet(ev core.Event) {

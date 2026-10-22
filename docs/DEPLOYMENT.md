@@ -99,9 +99,11 @@ Expected results:
 - overflow PoC emits a `D3` finding
 - tcache-poisoning PoC emits a `D7` finding
 - metadata-corruption PoC emits a `D8` finding before glibc aborts
+- size-swap PoC emits a `D9` size-mismatch finding
 - realloc churn runs clean and exercises the realloc-aware timeline
 - attach backfill recovers chunks from both the main heap and thread arenas
 - dlopen plugin is resolved and allocator probes refresh via `maps.refresh`
+- C++ allocations are labelled as `new`/`delete` when libstdc++ is present
 - `gofengshui validate` reaches `gfs_sink` with `RDI=0x4141` and exports a
   verified ROP trace to `/reports/rop`
 

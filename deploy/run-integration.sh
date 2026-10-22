@@ -68,6 +68,8 @@ verify_findings() {
   local syscall=build/reports/syscall_uaf.events.jsonl
   local realloc=build/reports/realloc.events.jsonl
   local metadata=build/reports/metadata.events.jsonl
+  local sizeswap=build/reports/size_swap.events.jsonl
+  local cxx=build/reports/cxx.events.jsonl
   local uafdirect=build/reports/uaf_direct.events.jsonl
   local dlopen=build/reports/dlopen-refresh.json
   local arena=build/reports/arena_backfill/heap.json
@@ -108,6 +110,20 @@ verify_findings() {
   else
     require_report_grep '"id":"D8"' "$metadata" "D8 metadata finding present" || failed=1
     require_report_grep 'invalid chunk size' "$metadata" "D8 classified the corrupted size" || failed=1
+  fi
+  if [ ! -s "$sizeswap" ]; then
+    echo "FAIL: missing $sizeswap" >&2
+    failed=1
+  else
+    require_report_grep '"id":"D9"' "$sizeswap" "D9 size mismatch present" || failed=1
+    require_report_grep 'chunk size changed while allocated' "$sizeswap" "D9 classified the mismatch" || failed=1
+  fi
+  if [ ! -s "$cxx" ]; then
+    echo "FAIL: missing $cxx" >&2
+    failed=1
+  else
+    require_report_grep '"type":1.*"arg2":6' "$cxx" "C++ new allocation labelled" || failed=1
+    require_report_grep '"type":2.*"arg1":7' "$cxx" "C++ delete free labelled" || failed=1
   fi
   if [ ! -s "$uafdirect" ]; then
     echo "FAIL: missing $uafdirect" >&2

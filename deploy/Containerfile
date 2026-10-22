@@ -1,5 +1,9 @@
 FROM docker.io/library/ubuntu:24.04
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libstdc++6 \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN mkdir -p /opt/gfs/testdata /reports
 COPY build/gofengshui /usr/local/bin/gofengshui
 COPY build/testdata/ /opt/gfs/testdata/

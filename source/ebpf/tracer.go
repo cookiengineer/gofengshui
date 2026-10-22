@@ -155,7 +155,8 @@ func New(cfg core.Config, target core.Target) (*Tracer, error) {
 		cfg:         cfg,
 	}
 	if t.events == nil || t.allocs == nil || t.tombstones == nil ||
-		t.stacks == nil || t.statsMap == nil || t.configMap == nil {
+		t.stacks == nil || t.statsMap == nil || t.configMap == nil ||
+		coll.Maps["sample_ctr"] == nil {
 		coll.Close()
 		return nil, errors.New("bpf object is missing required maps")
 	}
@@ -314,6 +315,75 @@ func (t *Tracer) attachThread(tid int, path string) error {
 	return errors.Join(attachErrs...)
 }
 
+// AttachCxx attaches C++ new/delete probes for one libstdc++ module. The
+// inner malloc/free calls are still emitted, labelled as new/delete by the BPF
+// cxx_op map. Missing symbols are reported but do not abort the session.
+func (t *Tracer) AttachCxx(path string) error {
+	if path == "" {
+		return nil
+	}
+	key := "cxx:" + path
+	t.mu.Lock()
+	if t.closed || t.attachedKey[key] {
+		t.mu.Unlock()
+		return nil
+	}
+	t.attachedKey[key] = true
+	pid := t.target.PID
+	t.mu.Unlock()
+
+	ex, err := link.OpenExecutable(path)
+	if err != nil {
+		return fmt.Errorf("open libstdc++ %s: %w", path, err)
+	}
+	opts := &link.UprobeOptions{PID: pid}
+	type attach struct {
+		symbol string
+		prog   string
+		ret    bool
+	}
+	links := []attach{
+		{"_Znwm", "gfs_new_enter", false},
+		{"_Znam", "gfs_new_enter", false},
+		{"_Znwm", "gfs_new_return", true},
+		{"_Znam", "gfs_new_return", true},
+		{"_ZdlPv", "gfs_delete_enter", false},
+		{"_ZdlPvm", "gfs_delete_enter", false},
+		{"_ZdaPv", "gfs_delete_enter", false},
+		{"_ZdaPvm", "gfs_delete_enter", false},
+		{"_ZdlPv", "gfs_delete_return", true},
+		{"_ZdlPvm", "gfs_delete_return", true},
+		{"_ZdaPv", "gfs_delete_return", true},
+		{"_ZdaPvm", "gfs_delete_return", true},
+	}
+	var errs []error
+	var newLinks []link.Link
+	for _, a := range links {
+		prog := t.coll.Programs[a.prog]
+		if prog == nil {
+			errs = append(errs, fmt.Errorf("missing program %s", a.prog))
+			continue
+		}
+		var l link.Link
+		var err error
+		if a.ret {
+			l, err = ex.Uretprobe(a.symbol, prog, opts)
+		} else {
+			l, err = ex.Uprobe(a.symbol, prog, opts)
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("attach %s/%s: %w", path, a.symbol, err))
+			continue
+		}
+		debugf("cxx %s tid=%d -> %s", a.symbol, pid, path)
+		newLinks = append(newLinks, l)
+	}
+	t.mu.Lock()
+	t.links = append(t.links, newLinks...)
+	t.mu.Unlock()
+	return errors.Join(errs...)
+}
+
 func taskIDs(pid int) []int {
 	entries, err := os.ReadDir(fmt.Sprintf("/proc/%d/task", pid))
 	if err != nil {
@@ -341,6 +411,7 @@ func (t *Tracer) updateConfig() error {
 		CgroupID: t.cfg.CgroupID,
 		PID:      pid,
 		Flags:    t.cfg.Flags(),
+		Sample:   t.cfg.SampleStacks,
 	}
 	key := uint32(0)
 	return t.configMap.Update(key, &c, ebpf.UpdateAny)

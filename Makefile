@@ -1,6 +1,7 @@
 GO        ?= go
 CLANG     ?= clang
 CC        ?= gcc
+CXX       ?= g++
 GOFLAGS   ?=
 BUILD_DIR := build
 BPF_DIR   := bpf
@@ -30,7 +31,9 @@ TESTBINS := $(BUILD_DIR)/testdata/alloc_loop \
             $(BUILD_DIR)/testdata/watch_alloc \
             $(BUILD_DIR)/testdata/metadata \
             $(BUILD_DIR)/testdata/uaf_direct \
-            $(BUILD_DIR)/testdata/dlopen_alloc
+            $(BUILD_DIR)/testdata/dlopen_alloc \
+            $(BUILD_DIR)/testdata/cxx_alloc \
+            $(BUILD_DIR)/testdata/size_swap
 
 TESTLIBS := $(BUILD_DIR)/testdata/libgfsplugin.so
 
@@ -69,6 +72,10 @@ $(BUILD_DIR)/testdata/%: source/testdata/c/%.c source/testdata/c/gfs_harness.h
 $(BUILD_DIR)/testdata/libgfsplugin.so: source/testdata/c/gfsplugin.c
 	@mkdir -p $(dir $@)
 	$(CC) -g -O0 -shared -fPIC -o $@ $<
+
+$(BUILD_DIR)/testdata/cxx_alloc: source/testdata/c/cxx_alloc.cpp source/testdata/c/gfs_harness.h
+	@mkdir -p $(dir $@)
+	$(CXX) -g -O0 -fno-omit-frame-pointer -fno-stack-protector -no-pie -o $@ $<
 
 clean:
 	rm -rf $(BUILD_DIR) $(BPF_GEN)

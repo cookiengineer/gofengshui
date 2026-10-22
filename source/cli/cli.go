@@ -92,6 +92,7 @@ Flags for run/attach:
   --backfill         scan the main heap when attaching (default true)
   --glibc-version    override detected glibc version (e.g. 2.31)
   --watch-freed      watch recently freed chunks for direct UAF writes
+  --sample-stacks N  capture every Nth user stack (power of two)
   --expect-findings  comma-separated detector IDs that must be present
   --expect-no-findings  fail if any finding is produced
   --expect-regs      validate sink registers (e.g. rdi=0x4141)
@@ -110,6 +111,14 @@ func configFlags(fs *flag.FlagSet) (*core.Config, *bool, *bool, *bool, *string, 
 	fs.BoolVar(&cfg.Backfill, "backfill", true, "scan the main heap when attaching")
 	fs.StringVar(&cfg.GlibcVersion, "glibc-version", "", "override detected glibc version (e.g. 2.31)")
 	fs.BoolVar(&cfg.WatchFreed, "watch-freed", false, "watch recently freed chunks for direct UAF writes")
+	fs.Func("sample-stacks", "capture every Nth user stack (power of two); 0 = all", func(v string) error {
+		n, err := strconv.ParseUint(v, 10, 32)
+		if err != nil {
+			return err
+		}
+		cfg.SampleStacks = uint32(n)
+		return nil
+	})
 	pause := fs.Bool("pause", false, "pause before continuing the target")
 	jsonl := fs.Bool("jsonl", false, "serve JSONL protocol on stdin/stdout")
 	follow := fs.Bool("follow", false, "follow clone/fork/vfork")

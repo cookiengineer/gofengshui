@@ -626,10 +626,11 @@ func (s *Session) mapsRefresh(conn *transport.Conn, f *proto.Frame) {
 	for _, m := range r.Modules {
 		mods = append(mods, m.Path)
 	}
-	paths := s.ReattachAllocators()
+	paths, cxxPaths := s.ReattachAllocators()
 	s.reply(conn, f, map[string]any{
 		"modules": mods, "count": len(mods),
-		"allocator_paths": paths, "threads": len(s.tracer.Threads()),
+		"allocator_paths": paths, "cxx_paths": cxxPaths,
+		"threads": len(s.tracer.Threads()),
 	}, nil)
 }
 
@@ -641,14 +642,15 @@ func sameFile(a, b string) bool {
 
 // ReattachAllocators refreshes allocator uprobes for all current threads and
 // any libc-like modules discovered after a dlopen. AttachThreadPath caches by
-// thread and path, so repeated refreshes are no-ops.
-func (s *Session) ReattachAllocators() []string {
+// thread and path, so repeated refreshes are no-ops. It also attaches C++
+// new/delete probes to libstdc++ modules.
+func (s *Session) ReattachAllocators() ([]string, []string) {
 	if s.bpf == nil {
-		return nil
+		return nil, nil
 	}
 	r := s.getResolver()
 	if r == nil {
-		return nil
+		return nil, nil
 	}
 	seen := make(map[string]bool)
 	var paths []string
@@ -661,26 +663,42 @@ func (s *Session) ReattachAllocators() []string {
 	}
 	base := s.target.LibcPath
 	add(base)
-	for _, m := range r.Modules {
-		if !strings.Contains(filepath.Base(m.Path), "libc.so") {
-			continue
+	cxxSeen := make(map[string]bool)
+	var cxxPaths []string
+	addCxx := func(p string) {
+		if p == "" || cxxSeen[p] {
+			return
 		}
+		cxxSeen[p] = true
+		cxxPaths = append(cxxPaths, p)
+	}
+	for _, m := range r.Modules {
+		name := filepath.Base(m.Path)
 		p := m.FSPath
 		if p == "" {
 			p = m.Path
 		}
-		if base != "" && sameFile(p, base) {
-			continue
+		switch {
+		case strings.Contains(name, "libc.so"):
+			if base != "" && sameFile(p, base) {
+				continue
+			}
+			add(p)
+		case strings.Contains(name, "libstdc++.so"):
+			addCxx(p)
 		}
-		add(p)
 	}
-	tids := s.tracer.Threads()
+	// A uprobe attached with PID=main covers every thread in the process.
+	// Attaching per-thread here would duplicate the original process-wide
+	// link and produce duplicate malloc/free events.
+	pid := s.tracer.PID()
 	for _, path := range paths {
-		for _, tid := range tids {
-			_ = s.bpf.AttachThreadPath(tid, path)
-		}
+		_ = s.bpf.AttachThreadPath(pid, path)
 	}
-	return paths
+	for _, path := range cxxPaths {
+		_ = s.bpf.AttachCxx(path)
+	}
+	return paths, cxxPaths
 }
 
 func (s *Session) heapPredict(conn *transport.Conn, f *proto.Frame) {

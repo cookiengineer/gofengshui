@@ -99,6 +99,16 @@ grep -q 'invalid chunk size' /reports/metadata.events.jsonl
 grep -q '\*\*D8\*\*' /reports/metadata/report.md
 echo "D8 chunk metadata corruption observed"
 
+echo "== allocation size mismatch =="
+timeout 30s gofengshui run --report /reports/size_swap --expect-findings D9 \
+  --stdout /reports/size_swap.stdout \
+  --stderr /reports/size_swap.stderr \
+  -- /opt/gfs/testdata/size_swap \
+  > /reports/size_swap.events.jsonl
+grep -q '"id":"D9"' /reports/size_swap.events.jsonl
+grep -q 'chunk size changed while allocated' /reports/size_swap.events.jsonl
+echo "D9 allocation size-field mismatch observed"
+
 echo "== allocation failure / OOM =="
 timeout 30s gofengshui run --report /reports/alloc_fail --expect-findings D4 \
   --stdout /reports/alloc_fail.stdout \
@@ -127,7 +137,7 @@ grep -q '\*\*D6\*\*' /reports/crash/report.md
 echo "D6 crash finding observed (symbolized RIP + fault info + stack hits)"
 
 echo "== clean allocation loop (no false positives) =="
-timeout 30s gofengshui run --report /reports/clean --expect-no-findings \
+timeout 30s gofengshui run --sample-stacks 4 --report /reports/clean --expect-no-findings \
   --stdout /reports/clean.stdout \
   --stderr /reports/clean.stderr \
   -- /opt/gfs/testdata/alloc_loop \
@@ -151,6 +161,16 @@ timeout 30s gofengshui run --report /reports/realloc --expect-no-findings \
 grep -q '"analysis"' /reports/realloc/heap.json
 grep -q '"size_classes"' /reports/realloc/heap.json
 echo "moving/in-place realloc churn produced no false positives"
+
+echo "== C++ new/delete labelling =="
+timeout 30s gofengshui run --report /reports/cxx --expect-no-findings \
+  --stdout /reports/cxx.stdout \
+  --stderr /reports/cxx.stderr \
+  -- /opt/gfs/testdata/cxx_alloc \
+  > /reports/cxx.events.jsonl
+grep -q '"type":1.*"arg2":6' /reports/cxx.events.jsonl
+grep -q '"type":2.*"arg1":7' /reports/cxx.events.jsonl
+echo "C++ new/delete allocations labelled (NEW/DELETE ops)"
 
 echo "== allocator profile override =="
 timeout 30s gofengshui run --glibc-version 2.31 \

@@ -149,7 +149,7 @@ func (a *Agent) Start(p CreateParams) (*Session, error) {
 	}
 	cfg := p.Config
 	if !cfg.Heap && !cfg.Syscalls && !cfg.UAF && !cfg.Stacks && !cfg.Detectors &&
-		!cfg.NoEBPF && !cfg.NoLibc && cfg.GlibcVersion == "" && !cfg.WatchFreed {
+		!cfg.NoEBPF && !cfg.NoLibc && cfg.GlibcVersion == "" && !cfg.WatchFreed && cfg.SampleStacks == 0 {
 		cfg = core.DefaultConfig()
 	}
 	s, err := a.createSession(p, cfg)
@@ -276,6 +276,10 @@ func (a *Agent) createSession(p CreateParams, cfg core.Config) (*Session, error)
 	if cfg.CgroupID == 0 && target.CgroupID != 0 {
 		cfg.CgroupID = target.CgroupID
 	}
+	if cfg.SampleStacks != 0 && cfg.SampleStacks&(cfg.SampleStacks-1) != 0 {
+		_ = s.tracer.Kill()
+		return nil, fmt.Errorf("sample_stacks must be a power of two")
+	}
 	s.cfg = cfg
 
 	profile := heap.DefaultProfile()
@@ -316,6 +320,7 @@ func (a *Agent) createSession(p CreateParams, cfg core.Config) (*Session, error)
 		return nil, fmt.Errorf("attach ebpf: %w", err)
 	}
 	s.bpf = tracer
+	s.ReattachAllocators()
 	s.tracer.AddProcessHook(func(tid int) {
 		_ = tracer.AttachThread(tid)
 	})
