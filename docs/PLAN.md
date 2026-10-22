@@ -180,9 +180,10 @@ Validation:
 - Argument registers match assertions.
 - The trace must leave the start address (start and sink may not be equal) and
   execute at least one control-transfer gadget before the sink.
-- Executable chain entries must decode as valid gadgets; when a chain base is
-  supplied, the chain must contain the start and sink addresses. Data words
-  are allowed.
+- Executable chain entries in the first `start` → `sink` segment must decode as
+  valid gadgets; when a chain base is supplied, the segment must contain both
+  the start and sink addresses. Words outside the segment are treated as data
+  and ignored.
 - Gadgets are classified by disassembly.
 - A legitimate sink call without a hijack path is not accepted.
 - A signal, exit, or max-step stop before the sink is not verified and does not
@@ -286,8 +287,17 @@ in `source/`.
   not separately characterized; the live snapshot overrides the version
   fallback where possible. Large tcache bins (a tunable beyond the default
   0x410 ceiling) are observation-only.
+- `--oom` captures OOM kill events host-wide. The OOM kill may be reported in a
+  kernel-reaper context outside the target cgroup, so the event is not
+  cgroup-filtered; use it only in a sandboxed environment.
 - ASLR and scheduling limit determinism; use relative offsets and recorded
   baselines.
+- The agent drops events whose task name matches its own. This prevents its
+  protocol writes from feeding back into the event stream, but a target with
+  the same `comm` as the agent would have its events suppressed; invoke the
+  agent under a distinct name when tracing such a target. Kernel OOM events are
+  exempt from this filter because the OOM killer can run in the agent's task
+  context while the victim is the target.
 - The agent is root-equivalent and belongs in a sandboxed CTF/CI environment.
 
 ## Current Implementation Status

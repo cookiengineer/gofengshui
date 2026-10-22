@@ -12,6 +12,22 @@ import (
 	"gofengshui/core"
 )
 
+func TestIsSelfEvent(t *testing.T) {
+	agent := core.Event{Comm: "gofengshui", Type: core.EventMemAccess}
+	if !isSelfEvent(agent, "gofengshui") {
+		t.Fatal("agent event was not recognized")
+	}
+	if isSelfEvent(core.Event{Comm: "target"}, "gofengshui") {
+		t.Fatal("target event was treated as an agent event")
+	}
+	if isSelfEvent(agent, "") {
+		t.Fatal("empty agent comm must not match")
+	}
+	if isSelfEvent(core.Event{Comm: "gofengshui", Type: core.EventOOM}, "gofengshui") {
+		t.Fatal("kernel OOM events must never be filtered as self-events")
+	}
+}
+
 func TestEmbeddedObjectParses(t *testing.T) {
 	spec, err := ebpf.LoadCollectionSpecFromReader(bytes.NewReader(bpfObject))
 	if err != nil {

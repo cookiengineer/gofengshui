@@ -232,10 +232,12 @@ A trace is only `verified: true` when:
 - the sink was reached at the registered address,
 - the start address differs from the sink and the trace left the start,
 - at least one control-transfer gadget executed before the sink, and
-- when `chain_base` is supplied, the captured chain contains both the start and
-  sink addresses and every executable entry decodes as a valid gadget (an
-  unreadable chain buffer is rejected). Data words in the chain (for example
-  `0x4141`) are allowed.
+- when `chain_base` is supplied, the first `start` → `sink` segment of the
+  captured chain contains both addresses and every executable entry in that
+  segment decodes as a valid gadget. Words outside the segment are treated as
+  data and ignored, and the exported `chain` contains only that segment; an
+  unreadable chain buffer is rejected. Data words inside the segment (for
+  example `0x4141`) are allowed.
 
 A signal, exit, or max-step stop before the sink is never reported as a sink
 hit: it emits no `sink` event, sets no last-sink result, and yields

@@ -496,6 +496,14 @@ func (s *Session) finishROP(rop *ROPState, st debugger.Stop, reason string) {
 		// chain captured with the sink hit when the trace did not name one.
 		chain = sink.Chain
 	}
+	// The chain window usually extends past the actual chain into unrelated
+	// stack words. Report only the start -> sink segment so the exported
+	// chain contains the executed chain and no decoding noise from stack
+	// leftovers.
+	chain = trimChainSegment(chain, rop.Start, rop.SinkAddr)
+	if sink != nil {
+		sink.Chain = chain
+	}
 	s.mu.Lock()
 	registeredSink := s.sink
 	s.mu.Unlock()
@@ -590,43 +598,91 @@ func validateROPTrace(start, sinkAddr uint64, sink *SinkHit, steps []ROPStep, ch
 			v.ChainValid = false
 			issue("chain buffer could not be read")
 		} else {
-			var sawStart, sawSink, startExecutable, sinkExecutable bool
-			for _, entry := range chain {
-				if entry.Value == start {
-					sawStart = true
-					startExecutable = startExecutable || entry.Executable
-				}
-				if entry.Value == sinkAddr {
-					sawSink = true
-					sinkExecutable = sinkExecutable || entry.Executable
-				}
-				if entry.Value == 0 {
-					continue
-				}
-				if entry.Executable {
+			// The chain window usually extends past the actual chain into
+			// unrelated stack words. Only validate the first start -> sink
+			// segment; surrounding words are data or another frame.
+			startIdx := chainEntryIndex(chain, start, 0, true)
+			if startIdx < 0 {
+				startIdx = chainEntryIndex(chain, start, 0, false)
+			}
+			if startIdx < 0 {
+				v.ChainValid = false
+				issue("chain does not contain the start address")
+			} else if !chain[startIdx].Executable {
+				v.ChainValid = false
+				issue("chain start address 0x%x is not executable", start)
+			}
+
+			from := 0
+			if startIdx >= 0 {
+				from = startIdx
+			}
+			sinkIdx := chainEntryIndex(chain, sinkAddr, from, true)
+			if sinkIdx < 0 {
+				sinkIdx = chainEntryIndex(chain, sinkAddr, from, false)
+			}
+			if sinkIdx < 0 {
+				v.ChainValid = false
+				issue("chain does not contain the sink address")
+			} else if !chain[sinkIdx].Executable {
+				v.ChainValid = false
+				issue("chain sink address 0x%x is not executable", sinkAddr)
+			}
+
+			if startIdx >= 0 && sinkIdx >= startIdx {
+				for i := startIdx; i <= sinkIdx; i++ {
+					entry := chain[i]
+					if entry.Value == 0 || !entry.Executable {
+						continue
+					}
 					if entry.Error != "" || entry.Gadget == nil || !entry.Gadget.Valid {
 						v.ChainValid = false
 						issue("chain entry %d at 0x%x is not a valid gadget", entry.Index, entry.Value)
 					}
 				}
 			}
-			if !sawStart {
-				v.ChainValid = false
-				issue("chain does not contain the start address")
-			} else if !startExecutable {
-				v.ChainValid = false
-				issue("chain start address 0x%x is not executable", start)
-			}
-			if !sawSink {
-				v.ChainValid = false
-				issue("chain does not contain the sink address")
-			} else if !sinkExecutable {
-				v.ChainValid = false
-				issue("chain sink address 0x%x is not executable", sinkAddr)
-			}
 		}
 	}
 	return v
+}
+
+// chainEntryIndex finds value in chain, optionally requiring it to be in an
+// executable mapping. Search starts at from.
+func chainEntryIndex(chain []disasm.ChainEntry, value uint64, from int, executable bool) int {
+	for i := from; i < len(chain); i++ {
+		if chain[i].Value != value {
+			continue
+		}
+		if executable && !chain[i].Executable {
+			continue
+		}
+		return i
+	}
+	return -1
+}
+
+// trimChainSegment returns the first executable start -> sink segment of a
+// captured chain window. The original chain is returned when either address is
+// missing so validation can report the specific failure.
+func trimChainSegment(chain []disasm.ChainEntry, start, sink uint64) []disasm.ChainEntry {
+	if len(chain) == 0 {
+		return chain
+	}
+	startIdx := chainEntryIndex(chain, start, 0, true)
+	if startIdx < 0 {
+		startIdx = chainEntryIndex(chain, start, 0, false)
+	}
+	if startIdx < 0 {
+		return chain
+	}
+	sinkIdx := chainEntryIndex(chain, sink, startIdx, true)
+	if sinkIdx < 0 {
+		sinkIdx = chainEntryIndex(chain, sink, startIdx, false)
+	}
+	if sinkIdx < startIdx {
+		return chain
+	}
+	return chain[startIdx : sinkIdx+1]
 }
 
 // sinkReached reports whether the current stop is at the sink. A signal or

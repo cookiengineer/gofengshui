@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -113,17 +115,46 @@ type Tracer struct {
 	done   chan struct{}
 	once   sync.Once
 
+	// agentComm identifies the tracer's own tasks. Events from them are
+	// dropped before they reach the heap model: tracing the agent's own
+	// stdout writes would otherwise feed the event stream back into itself.
+	agentComm string
+
 	target core.Target
 	cfg    core.Config
 }
 
-// New loads the embedded eBPF object. Attach is required before events flow.
 func debugf(format string, args ...any) {
 	if os.Getenv("GFS_BPF_LOG") != "" {
 		fmt.Fprintf(os.Stderr, "gfs-bpf: "+format+"\n", args...)
 	}
 }
 
+// selfComm returns the agent's task name as reported by bpf_get_current_comm.
+// /proc/self/comm is authoritative; the executable basename is a fallback for
+// environments where /proc is unavailable.
+func selfComm() string {
+	if data, err := os.ReadFile("/proc/self/comm"); err == nil {
+		if name := strings.TrimSpace(string(data)); name != "" {
+			return name
+		}
+	}
+	return filepath.Base(os.Args[0])
+}
+
+// isSelfEvent reports whether ev originated from the tracer itself. Filtering
+// these events prevents the agent's own protocol writes from being traced and
+// fed back into the event stream. Kernel OOM events are never filtered: the
+// OOM killer can run in the agent's task context while the victim is the
+// target, so its comm is not sufficient evidence that it is a self-event.
+func isSelfEvent(ev core.Event, agentComm string) bool {
+	if ev.Type == core.EventOOM {
+		return false
+	}
+	return agentComm != "" && ev.Comm == agentComm
+}
+
+// New loads the embedded eBPF object. Attach is required before events flow.
 func New(cfg core.Config, target core.Target) (*Tracer, error) {
 	spec, err := ebpf.LoadCollectionSpecFromReader(bytes.NewReader(bpfObject))
 	if err != nil {
@@ -151,6 +182,7 @@ func New(cfg core.Config, target core.Target) (*Tracer, error) {
 		errs:        make(chan error, 16),
 		attachedKey: make(map[string]bool),
 		done:        make(chan struct{}),
+		agentComm:   selfComm(),
 		target:      target,
 		cfg:         cfg,
 	}
@@ -206,6 +238,7 @@ func (t *Tracer) Attach() error {
 				if err == nil {
 					t.links = append(t.links, l)
 					attached = true
+					debugf("attach oom tracepoint")
 				} else {
 					debugf("attach oom tracepoint: %v", err)
 				}
@@ -221,6 +254,7 @@ func (t *Tracer) Attach() error {
 						}
 					} else {
 						t.links = append(t.links, l)
+						debugf("attach oom kprobe")
 					}
 				}
 			}
@@ -440,7 +474,11 @@ func (t *Tracer) updateConfig() error {
 		PID:      pid,
 		Flags:    t.cfg.Flags(),
 		Sample:   t.cfg.SampleStacks,
-		AgentPID: uint32(os.Getpid()),
+		// os.Getpid() is namespace-local, while bpf_get_current_pid_tgid()
+		// reports the initial-namespace PID. Comparing them can drop an
+		// unrelated target process. Self-events are filtered by task name in
+		// readLoop instead.
+		AgentPID: 0,
 	}
 	key := uint32(0)
 	return t.configMap.Update(key, &c, ebpf.UpdateAny)
@@ -462,6 +500,9 @@ func (t *Tracer) readLoop() {
 		}
 		ev, err := decodeEvent(rec.RawSample)
 		if err != nil {
+			continue
+		}
+		if isSelfEvent(ev, t.agentComm) {
 			continue
 		}
 		select {

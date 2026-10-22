@@ -470,7 +470,13 @@ int gfs_oom_kill(struct bpf_raw_tracepoint_args *ctx)
 	struct gfs_config *cfg = gfs_cfg();
 	struct gfs_event ev;
 
-	if (!gfs_allowed(cfg))
+	/*
+	 * OOM kill events are host-wide. The current task may be a kernel
+	 * reaper or the charging task, which is not necessarily in the target
+	 * cgroup. The program is only attached when --oom is enabled, so keep
+	 * the event regardless of the cgroup/PID filters used for syscalls.
+	 */
+	if (!cfg)
 		return 0;
 	gfs_init(&ev, GFS_EV_OOM);
 	ev.addr = ctx->args[0];
@@ -484,7 +490,8 @@ int gfs_oom_kprobe(struct pt_regs *ctx)
 	struct gfs_config *cfg = gfs_cfg();
 	struct gfs_event ev;
 
-	if (!gfs_allowed(cfg))
+	/* See gfs_oom_kill: OOM kill events bypass the cgroup/PID filters. */
+	if (!cfg)
 		return 0;
 	gfs_init(&ev, GFS_EV_OOM);
 	gfs_emit(&ev);

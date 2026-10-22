@@ -56,6 +56,59 @@ func TestValidateROPTraceWithoutChain(t *testing.T) {
 	}
 }
 
+func TestValidateROPTraceIgnoresWordsOutsideChainSegment(t *testing.T) {
+	const start, sink = uint64(0x1000), uint64(0x2000)
+	steps := []ROPStep{ropTestStep(start, true), ropTestStep(sink, false)}
+	hit := &SinkHit{Addr: sink, RIP: sink}
+
+	chain := []disasm.ChainEntry{
+		// A data word equal to the sink before the chain starts.
+		{Index: 0, Value: sink},
+		// Executable stack garbage before the start must be ignored.
+		{Index: 1, Value: 0x3001, Executable: true, Gadget: &disasm.Gadget{Address: 0x3001, Valid: false, Error: "unrecognized instruction"}},
+		{Index: 2, Value: 0x4141},
+		{Index: 3, Value: start, Executable: true, Gadget: &disasm.Gadget{Address: start, Valid: true, Ret: true}},
+		{Index: 4, Value: 0x4242},
+		{Index: 5, Value: sink, Executable: true, Gadget: &disasm.Gadget{Address: sink, Valid: true}},
+		// Executable stack garbage after the sink must also be ignored.
+		{Index: 6, Value: 0x3002, Executable: true, Gadget: &disasm.Gadget{Address: 0x3002, Valid: false, Error: "unrecognized instruction"}},
+	}
+
+	v := validateROPTrace(start, sink, hit, steps, chain, true, "")
+	if !v.ChainValid {
+		t.Fatalf("chain outside the start-sink segment must be ignored: %#v", v)
+	}
+	if len(v.Issues) != 0 {
+		t.Fatalf("unexpected issues: %v", v.Issues)
+	}
+}
+
+func TestTrimChainSegment(t *testing.T) {
+	const start, sink = uint64(0x1000), uint64(0x2000)
+	chain := []disasm.ChainEntry{
+		{Index: 0, Value: 0x4141},
+		{Index: 1, Value: 0x3001, Executable: true, Gadget: &disasm.Gadget{Address: 0x3001, Valid: false}},
+		{Index: 2, Value: start, Executable: true, Gadget: &disasm.Gadget{Address: start, Valid: true, Ret: true}},
+		{Index: 3, Value: 0x4242},
+		{Index: 4, Value: sink, Executable: true, Gadget: &disasm.Gadget{Address: sink, Valid: true}},
+		{Index: 5, Value: 0x3002, Executable: true, Gadget: &disasm.Gadget{Address: 0x3002, Valid: false}},
+	}
+	got := trimChainSegment(chain, start, sink)
+	if len(got) != 3 {
+		t.Fatalf("trimmed chain length = %d, want 3: %#v", len(got), got)
+	}
+	if got[0].Value != start || got[1].Value != 0x4242 || got[2].Value != sink {
+		t.Fatalf("unexpected trimmed chain: %#v", got)
+	}
+
+	if missing := trimChainSegment(chain, 0x9999, sink); len(missing) != len(chain) {
+		t.Fatalf("missing start should keep the original chain, got %d entries", len(missing))
+	}
+	if missing := trimChainSegment(chain, start, 0x9999); len(missing) != len(chain) {
+		t.Fatalf("missing sink should keep the original chain, got %d entries", len(missing))
+	}
+}
+
 func TestValidateROPTraceRejectsInvalidTraces(t *testing.T) {
 	const start, sink = uint64(0x1000), uint64(0x2000)
 	hit := &SinkHit{Addr: sink, RIP: sink}
@@ -63,10 +116,12 @@ func TestValidateROPTraceRejectsInvalidTraces(t *testing.T) {
 
 	noSinkChain := ropTestChain(start, sink)[:3]
 	noStartChain := append([]disasm.ChainEntry{ropTestChain(start, sink)[0]}, ropTestChain(start, sink)[3])
-	badGadgetChain := append(ropTestChain(start, sink), disasm.ChainEntry{
-		Index: 4, Value: 0x3000, Executable: true,
-		Gadget: &disasm.Gadget{Address: 0x3000, Valid: false, Error: "truncated"},
-	})
+	badGadgetChain := []disasm.ChainEntry{
+		{Index: 0, Value: 0x4141},
+		{Index: 1, Value: start, Executable: true, Gadget: &disasm.Gadget{Address: start, Valid: true, Ret: true}},
+		{Index: 2, Value: 0x3000, Executable: true, Gadget: &disasm.Gadget{Address: 0x3000, Valid: false, Error: "truncated"}},
+		{Index: 3, Value: sink, Executable: true, Gadget: &disasm.Gadget{Address: sink, Valid: true}},
+	}
 	nonExecStartChain := ropTestChain(start, sink)
 	nonExecStartChain[1].Executable = false
 	nonExecStartChain[1].Gadget = nil

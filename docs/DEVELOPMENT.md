@@ -107,7 +107,9 @@ allocator profile end-to-end:
 - `size_swap` replaces a size with a valid-looking value and triggers `D9`
 - `oom` triggers a bounded cgroup OOM from a sibling process while the agent
   traces `/bin/sleep`; the OOM tracepoint or kprobe emits a D4 kernel-OOM
-  finding (container memory limit: `GFS_MEMORY_LIMIT`, default `2g`)
+  finding (container memory limit: `GFS_MEMORY_LIMIT`, default `2g`). OOM
+  events are not restricted to the target cgroup because the kill can run in a
+  kernel-reaper context, so `--oom` reports host-wide OOM kill events.
 - prediction unit tests cover separate main/thread arena bins
 - `uaf_direct` writes to a freed chunk without a syscall and triggers D2
   through `--watch-freed`
