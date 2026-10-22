@@ -128,6 +128,9 @@ Allocation {
   gaps and address reuse.
 - Allocation prediction: glibc request2size, per-thread tcache LIFO,
   fastbin LIFO and smallbin FIFO candidate ordering.
+- Attach-time main-heap backfill, dlopen resolver refresh, stdio protocol
+  validation, software breakpoints, allocation-ID watch, and CLI CI
+  expectations all verified in the privileged suite.
 - D7 allocator metadata anomalies (later).
 
 ### Sink and ROP validation
@@ -260,7 +263,7 @@ Implemented and locally tested:
   hardware break/watchpoint installation
 - sink registration, hijack watch, ROP single-step tracing source,
   gadget classification and report export
-- multi-thread clone hooks, per-thread allocator probes, stop-the-world,
+- multi-thread clone hooks, process-wide allocator probes, stop-the-world,
   and fork/exec follow with allocator reattachment
 - CLI `run`, `attach`, `validate`, `agent`, `stdio`, `ctl`
 - `--no-ebpf` diagnostic mode for ptrace-only validation

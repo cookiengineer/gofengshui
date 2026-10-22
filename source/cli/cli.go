@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"gofengshui/source/agent"
 	"gofengshui/source/core"
 	"gofengshui/source/debugger"
+	"gofengshui/source/detect"
 	"gofengshui/source/proto"
 	"gofengshui/source/transport"
 )
@@ -87,6 +89,10 @@ Flags for run/attach:
   --no-detectors     disable detector findings
   --no-libc          disable libc uprobe attachment
   --no-ebpf          diagnostic: run ptrace only, without eBPF
+  --backfill         scan the main heap when attaching (default true)
+  --expect-findings  comma-separated detector IDs that must be present
+  --expect-no-findings  fail if any finding is produced
+  --expect-regs      validate sink registers (e.g. rdi=0x4141)
 `)
 }
 
@@ -99,6 +105,7 @@ func configFlags(fs *flag.FlagSet) (*core.Config, *bool, *bool, *bool, *string, 
 	fs.BoolVar(&cfg.Detectors, "detectors", true, "enable detector findings")
 	fs.BoolVar(&cfg.NoLibc, "no-libc", false, "disable libc uprobe attachment")
 	fs.BoolVar(&cfg.NoEBPF, "no-ebpf", false, "diagnostic: run ptrace only, without eBPF")
+	fs.BoolVar(&cfg.Backfill, "backfill", true, "scan the main heap when attaching")
 	pause := fs.Bool("pause", false, "pause before continuing the target")
 	jsonl := fs.Bool("jsonl", false, "serve JSONL protocol on stdin/stdout")
 	follow := fs.Bool("follow", false, "follow clone/fork/vfork")
@@ -112,6 +119,8 @@ func cmdRun(args []string, mode string) error {
 	fs := flag.NewFlagSet(mode, flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	pid := fs.Int("pid", 0, "pid to attach to")
+	expectFindings := fs.String("expect-findings", "", "comma-separated detector IDs that must be present")
+	expectNoFindings := fs.Bool("expect-no-findings", false, "fail if any finding is produced")
 	cfg, pause, jsonl, follow, report, stdout, stderr := configFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -159,7 +168,7 @@ func cmdRun(args []string, mode string) error {
 			}
 			s.Handle(ctx, conn, f)
 		}
-		return nil
+		return checkFindings(s.Engine(), *expectFindings, *expectNoFindings)
 	}
 
 	conn := transport.NewConn(strings.NewReader(""), os.Stdout)
@@ -184,6 +193,10 @@ func cmdRun(args []string, mode string) error {
 	case <-done:
 	}
 	time.Sleep(100 * time.Millisecond)
+
+	if err := checkFindings(s.Engine(), *expectFindings, *expectNoFindings); err != nil {
+		return err
+	}
 
 	if *report != "" {
 		if err := s.Export(*report); err != nil {
@@ -387,6 +400,67 @@ func closeRemote(codec *proto.Codec, session string, deadline time.Time) error {
 	}
 }
 
+func checkFindings(eng *detect.Engine, expected string, noFindings bool) error {
+	findings := eng.Recent()
+	if noFindings {
+		if len(findings) > 0 {
+			ids := make([]string, 0, len(findings))
+			for _, f := range findings {
+				ids = append(ids, f.ID)
+			}
+			return fmt.Errorf("unexpected findings: %s", strings.Join(ids, ","))
+		}
+		return nil
+	}
+	want := splitList(expected)
+	if len(want) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(findings))
+	for _, f := range findings {
+		seen[f.ID] = true
+	}
+	var missing []string
+	for _, id := range want {
+		if !seen[id] {
+			missing = append(missing, id)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("missing expected finding(s): %s", strings.Join(missing, ","))
+	}
+	return nil
+}
+
+func splitList(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func parseRegExpectations(s string) (map[string]uint64, error) {
+	out := make(map[string]uint64)
+	for _, part := range splitList(s) {
+		name, val, ok := strings.Cut(part, "=")
+		if !ok {
+			return nil, fmt.Errorf("invalid register assertion %q (want name=value)", part)
+		}
+		name = strings.ToLower(strings.TrimSpace(name))
+		val = strings.TrimSpace(val)
+		n, err := strconv.ParseUint(val, 0, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid value for %s: %w", name, err)
+		}
+		out[name] = n
+	}
+	return out, nil
+}
+
 // ReadStdinLine is a small test helper.
 func ReadStdinLine(r io.Reader) string {
 	data, _ := io.ReadAll(r)
@@ -401,6 +475,9 @@ func cmdValidate(args []string) error {
 	chainBase := fs.Uint64("chain-base", 0, "chain buffer address")
 	chainLen := fs.Int("chain-len", 64, "chain words to read")
 	maxSteps := fs.Int("max-steps", 512, "maximum single-step count")
+	expectRegs := fs.String("expect-regs", "", "comma-separated register assertions, e.g. rdi=0x4141")
+	expectFindings := fs.String("expect-findings", "", "comma-separated detector IDs that must be present")
+	expectNoFindings := fs.Bool("expect-no-findings", false, "fail if any finding is produced")
 	hijack := fs.Bool("hijack", false, "watch the saved-RIP slot of --hijack-func instead of arming from --start")
 	hijackFunc := fs.String("hijack-func", "gfs_vuln", "function whose saved return slot is watched")
 	cfg, _, _, follow, report, stdout, stderr := configFlags(fs)
@@ -469,6 +546,23 @@ func cmdValidate(args []string) error {
 	}
 	b, _ := json.MarshalIndent(result, "", "  ")
 	fmt.Println(string(b))
+	if *expectRegs != "" {
+		want, err := parseRegExpectations(*expectRegs)
+		if err != nil {
+			return err
+		}
+		if result.Sink == nil {
+			return errors.New("register assertions requested but sink was not reached")
+		}
+		for name, value := range want {
+			if got := result.Sink.Register(name); got != value {
+				return fmt.Errorf("register %s: got 0x%x, want 0x%x", name, got, value)
+			}
+		}
+	}
+	if err := checkFindings(s.Engine(), *expectFindings, *expectNoFindings); err != nil {
+		return err
+	}
 	if *report != "" {
 		if err := s.Export(*report); err != nil {
 			return err

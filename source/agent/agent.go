@@ -68,7 +68,7 @@ func (a *Agent) Handle(ctx context.Context, conn *transport.Conn, f *proto.Frame
 func methods() []string {
 	return []string{
 		proto.MethodSessionCreate, proto.MethodSessionClose, proto.MethodSessionStatus,
-		proto.MethodEventsSubscribe, proto.MethodHeapQuery, proto.MethodHeapSnapshot, proto.MethodHeapAnalyze, proto.MethodHeapPredict,
+		proto.MethodEventsSubscribe, proto.MethodHeapQuery, proto.MethodHeapSnapshot, proto.MethodHeapAnalyze, proto.MethodHeapPredict, proto.MethodMapsRefresh,
 		proto.MethodMemRead, proto.MethodMemWrite, proto.MethodRegsGet, proto.MethodStackGet,
 		proto.MethodBreakSet, proto.MethodBreakClear, proto.MethodWatchSet, proto.MethodWatchClear,
 		proto.MethodPause, proto.MethodResume, proto.MethodStep, proto.MethodMark,
@@ -275,6 +275,10 @@ func (a *Agent) createSession(p CreateParams, cfg core.Config) (*Session, error)
 	}
 	s.cfg = cfg
 
+	if p.Mode == "attach" && cfg.Backfill {
+		s.backfillHeap()
+	}
+
 	if cfg.NoEBPF || os.Getenv("GFS_NO_EBPF") == "1" {
 		return s, nil
 	}
@@ -289,7 +293,7 @@ func (a *Agent) createSession(p CreateParams, cfg core.Config) (*Session, error)
 		return nil, fmt.Errorf("attach ebpf: %w", err)
 	}
 	s.bpf = tracer
-	s.tracer.AddThreadHook(func(tid int) {
+	s.tracer.AddProcessHook(func(tid int) {
 		_ = tracer.AttachThread(tid)
 	})
 	s.tracer.AddExecHook(func(tid int) {

@@ -114,6 +114,7 @@ type Tracer struct {
 	hw              [4]*hwSlot
 	nextID          uint64
 	threadHooks     []func(int)
+	processHooks    []func(int)
 	execHooks       []func(int)
 	initialStopSeen bool
 
@@ -381,7 +382,7 @@ func (t *Tracer) handleStop(tid int, ws unix.WaitStatus) {
 		case int(unix.PTRACE_EVENT_CLONE), int(unix.PTRACE_EVENT_FORK), int(unix.PTRACE_EVENT_VFORK):
 			msg, err := unix.PtraceGetEventMsg(tid)
 			if os.Getenv("GFS_PTRACE_LOG") != "" {
-				fmt.Fprintf(os.Stderr, "gfs: clone event tid=%d new=%d err=%v\n", tid, msg, err)
+				fmt.Fprintf(os.Stderr, "gfs: clone/fork event tid=%d new=%d err=%v\n", tid, msg, err)
 			}
 			if err == nil {
 				newTid := int(msg)
@@ -390,7 +391,12 @@ func (t *Tracer) handleStop(tid int, ws unix.WaitStatus) {
 				t.mu.Unlock()
 				_ = unix.PtraceSetOptions(newTid, ptraceOptions(t.follow))
 				t.applyHardware(newTid)
-				t.runThreadHooks(newTid)
+				switch event {
+				case int(unix.PTRACE_EVENT_CLONE):
+					t.runThreadHooks(newTid)
+				case int(unix.PTRACE_EVENT_FORK), int(unix.PTRACE_EVENT_VFORK):
+					t.runProcessHooks(newTid)
+				}
 				// A clone event leaves the new task in a ptrace stop. It must
 				// be continued explicitly or the parent blocks forever.
 				err := unix.PtraceCont(newTid, 0)
@@ -648,6 +654,25 @@ func (t *Tracer) AddThreadHook(fn func(int)) {
 func (t *Tracer) runThreadHooks(tid int) {
 	t.mu.Lock()
 	hooks := append([]func(int){}, t.threadHooks...)
+	t.mu.Unlock()
+	for _, fn := range hooks {
+		fn(tid)
+	}
+}
+
+// AddProcessHook registers a callback for newly forked/vforked processes.
+func (t *Tracer) AddProcessHook(fn func(int)) {
+	if fn == nil {
+		return
+	}
+	t.mu.Lock()
+	t.processHooks = append(t.processHooks, fn)
+	t.mu.Unlock()
+}
+
+func (t *Tracer) runProcessHooks(tid int) {
+	t.mu.Lock()
+	hooks := append([]func(int){}, t.processHooks...)
 	t.mu.Unlock()
 	for _, fn := range hooks {
 		fn(tid)

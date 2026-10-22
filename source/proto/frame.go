@@ -30,6 +30,7 @@ const (
 	MethodHeapSnapshot    = "heap.snapshot"
 	MethodHeapAnalyze     = "heap.analyze"
 	MethodHeapPredict     = "heap.predict"
+	MethodMapsRefresh     = "maps.refresh"
 	MethodMemRead         = "mem.read"
 	MethodMemWrite        = "mem.write"
 	MethodRegsGet         = "regs.get"

@@ -36,6 +36,12 @@ type StreamEvent struct {
 	Message string         `json:"message,omitempty"`
 }
 
+// WatchController is the watchpoint subset used by the agent.
+type WatchController interface {
+	SetWatchpoint(addr, size uint64, typ debugger.WatchType, allocID uint64) (*debugger.Watchpoint, error)
+	ClearWatchpoint(id uint64) error
+}
+
 type subscriber struct {
 	conn *transport.Conn
 	ch   chan *proto.Frame
@@ -52,16 +58,18 @@ type Marker struct {
 
 // Session owns a target, an eBPF tracer, a ptrace tracer and a heap model.
 type Session struct {
-	id       string
-	agent    *Agent
-	cfg      core.Config
-	target   core.Target
-	resolver *symbols.Resolver
-	tracer   *debugger.Tracer
-	bpf      *ebpf.Tracer
-	engine   *detect.Engine
-	model    *heap.Model
-	files    []*os.File
+	id         string
+	agent      *Agent
+	cfg        core.Config
+	target     core.Target
+	resolver   *symbols.Resolver
+	resolverMu sync.RWMutex
+	tracer     *debugger.Tracer
+	watcher    WatchController
+	bpf        *ebpf.Tracer
+	engine     *detect.Engine
+	model      *heap.Model
+	files      []*os.File
 
 	mu       sync.Mutex
 	subs     map[uint64]*subscriber
@@ -75,6 +83,7 @@ type Session struct {
 	stops chan debugger.Stop
 
 	markers  []Marker
+	backfill *heap.BackfillStats
 	sink     *SinkInfo
 	hijack   *HijackState
 	rop      *ROPState
@@ -312,6 +321,8 @@ func (s *Session) Handle(ctx context.Context, conn *transport.Conn, f *proto.Fra
 		s.reply(conn, f, s.model.Analyze(), nil)
 	case proto.MethodHeapPredict:
 		s.heapPredict(conn, f)
+	case proto.MethodMapsRefresh:
+		s.mapsRefresh(conn, f)
 	case proto.MethodMemRead:
 		s.memRead(conn, f)
 	case proto.MethodMemWrite:
@@ -377,12 +388,14 @@ func (s *Session) status(conn *transport.Conn, f *proto.Frame) {
 	last := s.lastStop
 	sink := s.sink
 	rop := s.lastROP
+	backfill := s.backfill
 	s.mu.Unlock()
 	s.reply(conn, f, map[string]any{
 		"session":   s.id,
 		"target":    s.target,
 		"config":    s.cfg,
 		"stats":     s.model.Stats(),
+		"backfill":  backfill,
 		"last_stop": last,
 		"sink":      sink,
 		"rop":       rop,
@@ -427,6 +440,19 @@ func (s *Session) heapQuery(conn *transport.Conn, f *proto.Frame) {
 		"stats":       s.model.Stats(),
 		"analysis":    s.model.Analyze(),
 	}, nil)
+}
+
+func (s *Session) mapsRefresh(conn *transport.Conn, f *proto.Frame) {
+	if err := s.RefreshResolver(); err != nil {
+		s.reply(conn, f, nil, &proto.Error{Code: "refresh_failed", Message: err.Error()})
+		return
+	}
+	r := s.getResolver()
+	mods := make([]string, 0, len(r.Modules))
+	for _, m := range r.Modules {
+		mods = append(mods, m.Path)
+	}
+	s.reply(conn, f, map[string]any{"modules": mods, "count": len(mods)}, nil)
 }
 
 func (s *Session) heapPredict(conn *transport.Conn, f *proto.Frame) {
@@ -616,7 +642,11 @@ func (s *Session) watchSet(conn *transport.Conn, f *proto.Frame) {
 	if typ == "" {
 		typ = debugger.WatchAccess
 	}
-	wp, err := s.tracer.SetWatchpoint(p.Addr, p.Size, typ, p.AllocID)
+	w := s.watcher
+	if w == nil {
+		w = s.tracer
+	}
+	wp, err := w.SetWatchpoint(p.Addr, p.Size, typ, p.AllocID)
 	if err != nil {
 		s.reply(conn, f, nil, &proto.Error{Code: "watch_failed", Message: err.Error()})
 		return
@@ -629,7 +659,11 @@ func (s *Session) watchClear(conn *transport.Conn, f *proto.Frame) {
 		ID uint64 `json:"id"`
 	}
 	_ = f.DecodeParams(&p)
-	if err := s.tracer.ClearWatchpoint(p.ID); err != nil {
+	w := s.watcher
+	if w == nil {
+		w = s.tracer
+	}
+	if err := w.ClearWatchpoint(p.ID); err != nil {
 		s.reply(conn, f, nil, &proto.Error{Code: "watch_failed", Message: err.Error()})
 		return
 	}
@@ -800,55 +834,49 @@ func (s *Session) exportSession(conn *transport.Conn, f *proto.Frame) {
 	if p.Dir == "" {
 		p.Dir = filepath.Join("build", "reports", s.id)
 	}
-	s.mu.Lock()
-	frames := make([]*proto.Frame, len(s.eventLog))
-	copy(frames, s.eventLog)
-	rop := s.lastROP
-	sink := s.lastSink
-	markers := append([]Marker(nil), s.markers...)
-	s.mu.Unlock()
+	if err := s.Export(p.Dir); err != nil {
+		s.reply(conn, f, nil, &proto.Error{Code: "export_failed", Message: err.Error()})
+		return
+	}
+	s.reply(conn, f, map[string]any{
+		"dir": p.Dir, "events": filepath.Join(p.Dir, "events.jsonl"),
+		"heap":   filepath.Join(p.Dir, "heap.json"),
+		"report": filepath.Join(p.Dir, "report.md"),
+	}, nil)
+}
 
-	res := map[string]any{}
-	if err := os.MkdirAll(p.Dir, 0o755); err != nil {
-		s.reply(conn, f, nil, &proto.Error{Code: "export_failed", Message: err.Error()})
-		return
+func (s *Session) getResolver() *symbols.Resolver {
+	s.resolverMu.RLock()
+	r := s.resolver
+	s.resolverMu.RUnlock()
+	return r
+}
+
+// RefreshResolver rescans /proc/<pid>/maps so dlopen'ed modules become visible.
+func (s *Session) RefreshResolver() error {
+	r, err := symbols.NewResolver(s.target.PID)
+	if err != nil {
+		return err
 	}
-	if err := export.JSONL(filepath.Join(p.Dir, "events.jsonl"), frames); err != nil {
-		s.reply(conn, f, nil, &proto.Error{Code: "export_failed", Message: err.Error()})
-		return
-	}
-	res["events"] = filepath.Join(p.Dir, "events.jsonl")
-	if err := export.JSON(filepath.Join(p.Dir, "heap.json"), map[string]any{
-		"allocations": s.model.Allocations(false),
-		"tombstones":  s.model.Tombstones(),
-		"mappings":    s.model.Mappings(),
-		"stats":       s.model.Stats(),
-		"findings":    s.engine.Recent(),
-	}); err == nil {
-		res["heap"] = filepath.Join(p.Dir, "heap.json")
-	}
-	if rop != nil {
-		if err := export.JSON(filepath.Join(p.Dir, "rop.json"), rop); err == nil {
-			res["rop"] = filepath.Join(p.Dir, "rop.json")
-		}
-	}
-	if err := export.JSON(filepath.Join(p.Dir, "summary.json"), map[string]any{
-		"session": s.id, "target": s.target, "config": s.cfg,
-		"stats": s.model.Stats(), "sink": sink, "rop": rop, "markers": markers,
-	}); err == nil {
-		res["summary"] = filepath.Join(p.Dir, "summary.json")
-	}
-	if err := export.Report(filepath.Join(p.Dir, "report.md"), s.id, s.target, s.model.Stats(), sink, rop, s.engine.Recent()); err == nil {
-		res["report"] = filepath.Join(p.Dir, "report.md")
-	}
-	s.reply(conn, f, res, nil)
+	s.resolverMu.Lock()
+	s.resolver = r
+	s.resolverMu.Unlock()
+	return nil
 }
 
 func (s *Session) resolveSymbol(module, name string) (uint64, error) {
-	if s.resolver == nil {
+	r := s.getResolver()
+	if r == nil {
 		return 0, fmt.Errorf("no resolver")
 	}
-	sym, m, ok := s.resolver.Name(module, name)
+	sym, m, ok := r.Name(module, name)
+	if !ok {
+		if err := s.RefreshResolver(); err != nil {
+			return 0, fmt.Errorf("symbol %s not found (refresh: %v)", name, err)
+		}
+		r = s.getResolver()
+		sym, m, ok = r.Name(module, name)
+	}
 	if !ok {
 		return 0, fmt.Errorf("symbol %s not found", name)
 	}
@@ -856,10 +884,11 @@ func (s *Session) resolveSymbol(module, name string) (uint64, error) {
 }
 
 func (s *Session) symbolize(addr uint64) (string, string, uint64, bool) {
-	if s.resolver == nil {
+	r := s.getResolver()
+	if r == nil {
 		return "", "", 0, false
 	}
-	info := s.resolver.Addr(addr)
+	info := r.Addr(addr)
 	if info.ModulePath == "" {
 		return "", "", 0, false
 	}
@@ -867,10 +896,11 @@ func (s *Session) symbolize(addr uint64) (string, string, uint64, bool) {
 }
 
 func (s *Session) executable(addr uint64) bool {
-	if s.resolver == nil {
+	r := s.getResolver()
+	if r == nil {
 		return false
 	}
-	m := s.resolver.ModuleFor(addr)
+	m := r.ModuleFor(addr)
 	if m == nil {
 		return false
 	}
@@ -991,6 +1021,7 @@ func (s *Session) Export(dir string) error {
 	copy(frames, s.eventLog)
 	rop := s.lastROP
 	sink := s.lastSink
+	backfill := s.backfill
 	markers := append([]Marker(nil), s.markers...)
 	s.mu.Unlock()
 
@@ -1006,6 +1037,7 @@ func (s *Session) Export(dir string) error {
 		"mappings":    s.model.Mappings(),
 		"stats":       s.model.Stats(),
 		"analysis":    s.model.Analyze(),
+		"backfill":    backfill,
 		"findings":    s.engine.Recent(),
 	}); err != nil {
 		return err
@@ -1017,7 +1049,8 @@ func (s *Session) Export(dir string) error {
 	}
 	if err := export.JSON(filepath.Join(dir, "summary.json"), map[string]any{
 		"session": s.id, "target": s.target, "config": s.cfg,
-		"stats": s.model.Stats(), "sink": sink, "rop": rop, "markers": markers,
+		"stats": s.model.Stats(), "sink": sink, "rop": rop,
+		"markers": markers, "backfill": backfill,
 	}); err != nil {
 		return err
 	}
@@ -1069,4 +1102,29 @@ func (s *Session) SymbolAddress(symbol string) (uint64, error) {
 // Predict reports likely next allocation addresses for a request size.
 func (s *Session) Predict(tid uint32, size uint64, limit int) heap.Prediction {
 	return s.model.Predict(tid, size, limit)
+}
+
+func (s *Session) backfillHeap() {
+	maps, err := symbols.ReadMaps(s.target.PID)
+	if err != nil {
+		return
+	}
+	var start, end uint64
+	for _, m := range maps {
+		if m.Path == "[heap]" {
+			start, end = m.Start, m.End
+			break
+		}
+	}
+	if start == 0 || end <= start {
+		return
+	}
+	st := s.model.BackfillHeap(start, end, func(addr uint64, size int) ([]byte, error) {
+		return s.tracer.ReadMemory(addr, size)
+	}, time.Now())
+	if st.Chunks > 0 {
+		s.mu.Lock()
+		s.backfill = &st
+		s.mu.Unlock()
+	}
 }

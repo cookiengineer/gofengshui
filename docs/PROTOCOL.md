@@ -82,12 +82,16 @@ Replay begins after `since`; live events follow. Event payloads:
 {"method":"heap.analyze","params":{"session":"s1"}}
 {"method":"heap.predict","params":{"session":"s1","tid":7,"size":24,"limit":16}}
 {"method":"heap.snapshot","params":{"session":"s1"}}
+{"method":"maps.refresh","params":{"session":"s1"}}
 ```
 
 `heap.query` and `heap.snapshot` include an `analysis` object with size-class
 histograms, largest live/freed chunks, address gaps and address-reuse counts.
 
 `heap.predict` returns likely next allocation addresses for a requested size.
+`maps.refresh` rescans the target's `/proc/<pid>/maps`, making `dlopen`ed
+modules available to later symbol lookups.
+
 It models glibc `request2size`, per-thread tcache LIFO (7 chunks), fastbin
 LIFO for chunk sizes up to `0x80`, and smallbin FIFO above that. `tid: 0`
 merges free sequences across threads. Candidates include source and

@@ -103,15 +103,20 @@ func (m *Model) Apply(ev core.Event) []core.Finding {
 		m.findings = append(m.findings, f)
 	case core.EventInvalidFree:
 		m.applyFree(ev, false)
-		f := core.Finding{
-			ID:        "D1",
-			Severity:  "medium",
-			Message:   fmt.Sprintf("free of untracked pointer 0x%x", ev.Addr),
-			Event:     &ev,
-			Timestamp: ev.Timestamp,
-			Details:   map[string]any{"unknown_allocation": ev.Flags&1 != 0},
+		// Invalid frees of untracked pointers are ambiguous after attaching
+		// to a running process: the allocation may simply predate the
+		// session. Keep the raw event, but only raise a finding when the
+		// allocator-side event was not marked unknown.
+		if ev.Flags&1 == 0 {
+			f := core.Finding{
+				ID:        "D1",
+				Severity:  "medium",
+				Message:   fmt.Sprintf("free of untracked pointer 0x%x", ev.Addr),
+				Event:     &ev,
+				Timestamp: ev.Timestamp,
+			}
+			m.findings = append(m.findings, f)
 		}
-		m.findings = append(m.findings, f)
 	case core.EventMmap:
 		m.pending[ev.TID] = pendingMmap{
 			size: ev.Size, prot: ev.Arg1, flags: ev.Arg2,
@@ -162,6 +167,10 @@ func (m *Model) applyAlloc(ev core.Event) {
 }
 
 func (m *Model) applyFree(ev core.Event, double bool) {
+	if ev.Flags&1 != 0 && m.allocs[ev.Addr] == nil {
+		// Unknown pointer after attach: do not fabricate a tombstone.
+		return
+	}
 	if a := m.allocs[ev.Addr]; a != nil {
 		a.State = core.StateFreed
 		a.FreeTS = ev.Timestamp.UnixNano()

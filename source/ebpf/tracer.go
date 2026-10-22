@@ -181,16 +181,11 @@ func (t *Tracer) Attach() error {
 			t.ex = ex
 			t.libcPath = t.target.LibcPath
 			t.mu.Unlock()
-			var attachErrs []error
-			for _, tid := range taskIDs(t.target.PID) {
-				if err := t.attachThread(tid, t.libcPath); err != nil {
-					debugf("attach thread %d: %v", tid, err)
-					attachErrs = append(attachErrs, err)
-				}
-			}
-			if len(attachErrs) > 0 {
+			// One uprobe link per process covers all of its threads.
+			if err := t.attachThread(t.target.PID, t.libcPath); err != nil {
+				debugf("attach process %d: %v", t.target.PID, err)
 				select {
-				case t.errs <- errors.Join(attachErrs...):
+				case t.errs <- err:
 				default:
 				}
 			}

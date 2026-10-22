@@ -185,6 +185,8 @@ type Config struct {
 	NoLibc bool `json:"no_libc"`
 	// NoEBPF is a diagnostic fallback that runs only the ptrace engine.
 	NoEBPF bool `json:"no_ebpf"`
+	// Backfill scans the main heap when attaching to a running process.
+	Backfill bool `json:"backfill"`
 }
 
 func DefaultConfig() Config {
@@ -194,6 +196,7 @@ func DefaultConfig() Config {
 		UAF:       true,
 		Stacks:    true,
 		Detectors: true,
+		Backfill:  true,
 	}
 }
 
