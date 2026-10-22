@@ -36,7 +36,7 @@ Rules:
   "pause":false,
   "follow":false,
   "config":{"heap":true,"syscalls":true,"uaf":true,"stacks":true,"detectors":true,
-            "no_libc":false,"no_ebpf":false,"glibc_version":""}
+            "no_libc":false,"no_ebpf":false,"glibc_version":"","watch_freed":false}
 }}
 ```
 
@@ -53,6 +53,11 @@ Close a session:
 ```json
 {"method":"session.close","params":{"session":"s1","kill":true}}
 ```
+
+`session.status` returns the active `profile`, heap `stats` and — when eBPF is
+active — a `bpf` object with `events`, `drops`, `allocs`, `frees` and `checks`.
+`drops` is the ring-buffer loss counter; a non-zero value means the userspace
+consumer could not keep up.
 
 ## Events
 
@@ -73,6 +78,13 @@ Replay begins after `since`; live events follow. Event payloads:
 {"kind":"marker","marker":"phase-2"}
 ```
 
+Crash-like signal stops also carry `fault_addr`, `fault_code` (from
+`PTRACE_GETSIGINFO`) and a `stack` word window captured before resuming the
+target. The corresponding D6 finding reports `fault_region`
+(`null`/`unmapped`/`mapped`), `fault_access` (`not-mapped`, `protection`,
+`kernel`) and `stack_hits` (executable addresses found in the window, with
+module/symbol/offset where resolvable).
+
 ## Heap
 
 ```json
@@ -81,6 +93,9 @@ Replay begins after `since`; live events follow. Event payloads:
 {"method":"heap.query","params":{"session":"s1","live":true,"limit":100}}
 {"method":"heap.analyze","params":{"session":"s1"}}
 {"method":"heap.predict","params":{"session":"s1","tid":7,"size":24,"limit":16}}
+{"method":"heap.baseline","params":{"session":"s1","name":"after-setup","path":"/tmp/base.json"}}
+{"method":"heap.diff","params":{"session":"s1","name":"after-setup"}}
+{"method":"heap.recipe","params":{"session":"s1","tid":7,"size":24,"count":8}}
 {"method":"heap.snapshot","params":{"session":"s1"}}
 {"method":"maps.refresh","params":{"session":"s1"}}
 ```
@@ -93,8 +108,17 @@ override detection.
 
 `heap.predict` returns likely next allocation addresses for a requested size,
 using the detected profile for tcache size/count, safe-linking and bin limits.
+
+`heap.baseline` stores a labeled analysis snapshot and optionally writes it to
+`path`; `heap.diff` compares the current heap against that snapshot (size-class,
+gap and address-reuse deltas). `heap.recipe` returns an ordered `malloc`/`free`
+plan for a requested size and count: predicted free-list reclaims first, then
+live same-size candidates, then explicitly unpredicted new chunks. Recipe
+addresses are advisory.
 `maps.refresh` rescans the target's `/proc/<pid>/maps`, making `dlopen`ed
-modules available to later symbol lookups.
+modules available to later symbol lookups. It also reattaches allocator probes
+for all current threads and libc-like modules, returning `allocator_paths` and
+`threads` in the result.
 
 It models glibc `request2size`, per-thread tcache LIFO (7 chunks), fastbin
 LIFO for chunk sizes up to `0x80`, and smallbin FIFO above that. `tid: 0`
@@ -123,8 +147,15 @@ confidence (`tcache-lifo`/high, `fastbin-lifo`/medium,
 ```
 
 Watch types: `read`, `write`, `rw`, `execute`. x86 supports four hardware
-slots per thread. Prefer hardware breakpoints on addresses that already have
-uprobes.
+slots per thread. When watching by `alloc_id` and `size` is omitted, the
+agent watches the first 8 bytes of the chunk. Prefer hardware breakpoints on
+addresses that already have uprobes.
+
+With `config.watch_freed: true` (CLI `--watch-freed`), the agent installs
+write watchpoints on the most recently freed chunks, evicting its own oldest
+watchpoint when slots run out. A hit is reported as D2 with
+`details.source: hardware-watchpoint`, then the target resumes. Writes from
+inside libc/ld are treated as allocator internals and ignored.
 
 ## Control
 
@@ -197,6 +228,8 @@ Exports:
 - `rop.json` when a trace exists
 - `summary.json`
 - `report.md`
+- `baselines.json` when a baseline was captured
+- `recipe.json` when a recipe was built
 
 ## `ctl` helper
 

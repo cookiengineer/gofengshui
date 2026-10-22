@@ -93,7 +93,7 @@ func TestWatchAllocationByID(t *testing.T) {
 	a := m.Allocations(true)[0]
 	fw := &fakeWatcher{}
 	s := &Session{model: m, watcher: fw}
-	params, _ := json.Marshal(map[string]any{"alloc_id": a.ID, "size": 8, "type": "write"})
+	params, _ := json.Marshal(map[string]any{"alloc_id": a.ID, "type": "write"})
 	f := &proto.Frame{Version: proto.Version, Type: proto.TypeRequest, ID: 7, Method: proto.MethodWatchSet, Params: params}
 	var out bytes.Buffer
 	conn := transport.NewConn(bytes.NewReader(nil), &out)
@@ -142,5 +142,14 @@ func TestRefreshResolverSelf(t *testing.T) {
 	r := s.getResolver()
 	if r == nil || len(r.Modules) == 0 {
 		t.Fatal("refresh did not resolve modules")
+	}
+}
+
+func TestFaultAccessNames(t *testing.T) {
+	cases := map[int32]string{1: "not-mapped", 2: "protection", 0x80: "kernel", 99: "unknown"}
+	for code, want := range cases {
+		if got := faultAccess(code); got != want {
+			t.Fatalf("faultAccess(%d) = %q, want %q", code, got, want)
+		}
 	}
 }

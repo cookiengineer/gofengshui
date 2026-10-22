@@ -35,6 +35,30 @@ grep -q '"id":"D2"' /reports/uaf.events.jsonl
 grep -q 'use-after-free' /reports/uaf/report.md
 echo "D2 UAF finding observed"
 
+echo "== syscall buffer UAF =="
+timeout 30s gofengshui run --report /reports/syscall_uaf --expect-findings D2 \
+  --stdout /reports/syscall_uaf.stdout \
+  --stderr /reports/syscall_uaf.stderr \
+  -- /opt/gfs/testdata/syscall_uaf \
+  > /reports/syscall_uaf.events.jsonl
+grep -q '"id":"D2"' /reports/syscall_uaf.events.jsonl
+grep -q 'use-after-free' /reports/syscall_uaf/report.md
+grep -q '"arg1":257' /reports/syscall_uaf.events.jsonl
+grep -q '"arg1":59' /reports/syscall_uaf.events.jsonl
+grep -q '"arg1":40' /reports/syscall_uaf.events.jsonl
+grep -q '"arg1":275' /reports/syscall_uaf.events.jsonl
+echo "D2 observed through openat/execve/sendfile/splice buffers"
+
+echo "== direct UAF write (auto watch) =="
+timeout 30s gofengshui run --watch-freed --report /reports/uaf_direct --expect-findings D2 \
+  --stdout /reports/uaf_direct.stdout \
+  --stderr /reports/uaf_direct.stderr \
+  -- /opt/gfs/testdata/uaf_direct \
+  > /reports/uaf_direct.events.jsonl
+grep -q '"id":"D2"' /reports/uaf_direct.events.jsonl
+grep -q 'hardware-watchpoint' /reports/uaf_direct.events.jsonl
+echo "D2 direct write-after-free observed via hardware watchpoint"
+
 echo "== overflow =="
 timeout 30s gofengshui run --report /reports/overflow --expect-findings D3 \
   --stdout /reports/overflow.stdout \
@@ -64,6 +88,17 @@ grep -q '"tcache": true' /reports/poison/heap.json
 grep -q '"safe_linking": true' /reports/poison/heap.json
 echo "D7 tcache link anomaly observed; detected glibc $GLIBC_VERSION profile"
 
+echo "== heap metadata corruption =="
+timeout 30s gofengshui run --report /reports/metadata --expect-findings D8 \
+  --stdout /reports/metadata.stdout \
+  --stderr /reports/metadata.stderr \
+  -- /opt/gfs/testdata/metadata \
+  > /reports/metadata.events.jsonl
+grep -q '"id":"D8"' /reports/metadata.events.jsonl
+grep -q 'invalid chunk size' /reports/metadata.events.jsonl
+grep -q '\*\*D8\*\*' /reports/metadata/report.md
+echo "D8 chunk metadata corruption observed"
+
 echo "== allocation failure / OOM =="
 timeout 30s gofengshui run --report /reports/alloc_fail --expect-findings D4 \
   --stdout /reports/alloc_fail.stdout \
@@ -84,8 +119,12 @@ timeout 30s gofengshui run --report /reports/crash --expect-findings D6 \
   > /reports/crash.events.jsonl
 grep -q '"id":"D6"' /reports/crash.events.jsonl
 grep -q 'signal 11 at RIP' /reports/crash.events.jsonl
+grep -qF 'fault=0x0 [null]' /reports/crash.events.jsonl
+grep -q '"fault_region":"null"' /reports/crash.events.jsonl
+grep -q '"fault_access":"not-mapped"' /reports/crash.events.jsonl
+grep -q '"stack_hits"' /reports/crash.events.jsonl
 grep -q '\*\*D6\*\*' /reports/crash/report.md
-echo "D6 crash finding observed (SIGSEGV with symbolized RIP)"
+echo "D6 crash finding observed (symbolized RIP + fault info + stack hits)"
 
 echo "== clean allocation loop (no false positives) =="
 timeout 30s gofengshui run --report /reports/clean --expect-no-findings \
@@ -102,6 +141,16 @@ grep -q 'No findings recorded' /reports/clean/report.md
 grep -q '"analysis"' /reports/clean/heap.json
 grep -q '"size_classes"' /reports/clean/heap.json
 echo "no false-positive findings on clean malloc/free loop; heap analysis exported"
+
+echo "== realloc churn =="
+timeout 30s gofengshui run --report /reports/realloc --expect-no-findings \
+  --stdout /reports/realloc.stdout \
+  --stderr /reports/realloc.stderr \
+  -- /opt/gfs/testdata/realloc_churn \
+  > /reports/realloc.events.jsonl
+grep -q '"analysis"' /reports/realloc/heap.json
+grep -q '"size_classes"' /reports/realloc/heap.json
+echo "moving/in-place realloc churn produced no false positives"
 
 echo "== allocator profile override =="
 timeout 30s gofengshui run --glibc-version 2.31 \
@@ -185,6 +234,30 @@ done < /tmp/backfill.addrs
 grep -q '"backfill"' /reports/backfill/heap.json
 echo "attach backfill recovered live heap chunks"
 
+echo "== attach thread-arena backfill =="
+rm -f /tmp/arena_backfill.*.addrs
+/opt/gfs/testdata/arena_backfill &
+ARENA_TARGET=$!
+for _ in $(seq 1 50); do
+  ARENA_FILES=$(compgen -G '/tmp/arena_backfill.*.addrs' | wc -l)
+  [ "$ARENA_FILES" -ge 2 ] && break
+  sleep 0.05
+done
+timeout 20s gofengshui attach --pid "$ARENA_TARGET" --backfill --expect-no-findings \
+  --report /reports/arena_backfill \
+  --stdout /reports/arena_backfill.stdout \
+  --stderr /reports/arena_backfill.stderr \
+  > /reports/arena_backfill.events.jsonl
+wait "$ARENA_TARGET" 2>/dev/null || true
+for f in /tmp/arena_backfill.*.addrs; do
+  while read -r addr; do
+    [ -n "$addr" ] || continue
+    grep -q "\"addr\": $addr" /reports/arena_backfill/heap.json
+  done < "$f"
+done
+grep -qE '"arenas": [1-9][0-9]*' /reports/arena_backfill/heap.json
+echo "attach backfill recovered thread-arena chunks"
+
 echo "== stdio JSONL =="
 printf '%s\n' \
   '{"v":1,"type":"request","id":1,"method":"events.subscribe","params":{"since":0}}' \
@@ -192,6 +265,9 @@ printf '%s\n' \
   '{"v":1,"type":"request","id":3,"method":"wait","params":{"type":"finding","id":"D2","timeout_ms":10000}}' \
   '{"v":1,"type":"request","id":4,"method":"assert","params":{"assertions":[{"type":"finding","id":"D2","min_count":1}]}}' \
   '{"v":1,"type":"request","id":5,"method":"session.status","params":{}}' \
+  '{"v":1,"type":"request","id":6,"method":"heap.baseline","params":{"name":"check"}}' \
+  '{"v":1,"type":"request","id":7,"method":"heap.diff","params":{"name":"check"}}' \
+  '{"v":1,"type":"request","id":8,"method":"heap.recipe","params":{"size":64,"count":4}}' \
   | timeout 30s gofengshui run --jsonl --pause -- /opt/gfs/testdata/uaf \
   > /reports/stdio.jsonl
 grep -q '"id":"D2"' /reports/stdio.jsonl
@@ -199,7 +275,14 @@ grep -q '"type":"result","id":3' /reports/stdio.jsonl
 grep -q '"type":"result","id":4,"result":{"ok":true' /reports/stdio.jsonl
 grep -q '"type":"result","id":5' /reports/stdio.jsonl
 grep -q '"profile":{' /reports/stdio.jsonl
-echo "stdio JSONL session + D2 event + wait/assert + profile status verified"
+grep -q '"bpf":{' /reports/stdio.jsonl
+grep -q '"drops":0' /reports/stdio.jsonl
+grep -q '"type":"result","id":6' /reports/stdio.jsonl
+grep -q '"type":"result","id":7' /reports/stdio.jsonl
+grep -q '"live_delta"' /reports/stdio.jsonl
+grep -q '"type":"result","id":8' /reports/stdio.jsonl
+grep -q '"reclaim"' /reports/stdio.jsonl
+echo "stdio JSONL session + D2 + wait/assert + profile + baseline/diff + recipe verified"
 
 echo "== rop sink =="
 timeout 30s gofengshui validate --report /reports/rop --expect-regs rdi=0x4141 \
@@ -247,6 +330,69 @@ grep -q '"id":"D2"' /reports/protocol.jsonl
 echo "unix socket session + D2 event + close verified"
 cleanup_agent
 trap - EXIT
+
+echo "== dlopen rescan + allocator reattach =="
+DL_AGENT=""
+cleanup_dl_agent() {
+  if [ -n "$DL_AGENT" ]; then
+    kill "$DL_AGENT" 2>/dev/null || true
+    wait "$DL_AGENT" 2>/dev/null || true
+    DL_AGENT=""
+  fi
+}
+trap cleanup_dl_agent EXIT
+rm -f /tmp/gfs-dlopen.sock /tmp/dlopen_alloc.ready \
+  /tmp/dlopen_alloc.release /tmp/dlopen_alloc.ptr
+gofengshui agent --socket /tmp/gfs-dlopen.sock \
+  > /reports/agent-dlopen.stdout 2> /reports/agent-dlopen.stderr &
+DL_AGENT=$!
+for _ in $(seq 1 50); do
+  [ -S /tmp/gfs-dlopen.sock ] && break
+  sleep 0.1
+done
+CREATE=$(timeout 20s gofengshui ctl --socket /tmp/gfs-dlopen.sock --timeout 15s \
+  --method session.create \
+  --params '{"mode":"spawn","path":"/opt/gfs/testdata/dlopen_alloc","args":["/opt/gfs/testdata/dlopen_alloc"],"pause":true}')
+SESSION=$(printf '%s\n' "$CREATE" | sed -n 's/.*"session": "\([^"]*\)".*/\1/p' | head -1)
+if [ -z "$SESSION" ]; then
+  echo "dlopen test could not create a session" >&2
+  printf '%s\n' "$CREATE" >&2
+  exit 1
+fi
+timeout 20s gofengshui ctl --socket /tmp/gfs-dlopen.sock --timeout 15s \
+  --session "$SESSION" --method resume > /reports/dlopen-resume.json
+for _ in $(seq 1 100); do
+  [ -f /tmp/dlopen_alloc.ready ] && break
+  sleep 0.05
+done
+[ -f /tmp/dlopen_alloc.ready ] || {
+  echo "dlopen target did not become ready" >&2
+  exit 1
+}
+REFRESH=$(timeout 20s gofengshui ctl --socket /tmp/gfs-dlopen.sock --timeout 15s \
+  --session "$SESSION" --method maps.refresh)
+printf '%s\n' "$REFRESH" > /reports/dlopen-refresh.json
+printf '%s\n' "$REFRESH" | grep -q 'libgfsplugin.so'
+printf '%s\n' "$REFRESH" | grep -q '"allocator_paths"'
+touch /tmp/dlopen_alloc.release
+for _ in $(seq 1 100); do
+  [ -f /tmp/dlopen_alloc.ptr ] && break
+  sleep 0.05
+done
+[ -f /tmp/dlopen_alloc.ptr ] || {
+  echo "dlopen target did not allocate after refresh" >&2
+  exit 1
+}
+DL_ADDR=$(cat /tmp/dlopen_alloc.ptr)
+QUERY=$(timeout 20s gofengshui ctl --socket /tmp/gfs-dlopen.sock --timeout 15s \
+  --session "$SESSION" --method heap.query --params "{\"addr\":$DL_ADDR}")
+printf '%s\n' "$QUERY" > /reports/dlopen-query.json
+printf '%s\n' "$QUERY" | grep -q "\"addr\": $DL_ADDR"
+timeout 20s gofengshui ctl --socket /tmp/gfs-dlopen.sock --timeout 15s \
+  --session "$SESSION" --method session.close --params '{"kill":true}' > /dev/null
+cleanup_dl_agent
+trap - EXIT
+echo "dlopen module resolved and allocator probes refreshed"
 
 echo
 echo "all in-container tests passed"

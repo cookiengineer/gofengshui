@@ -95,6 +95,8 @@ func (o AllocOp) String() string {
 const (
 	EventFlagUnknown    = 1 << 0
 	EventFlagTcacheLink = 1 << 1
+	EventFlagMetadata   = 1 << 2
+	EventFlagNextChunk  = 1 << 3
 )
 
 // Event is a decoded ring-buffer record.
@@ -197,6 +199,8 @@ type Config struct {
 	Backfill bool `json:"backfill"`
 	// GlibcVersion overrides allocator profile detection (for example "2.31").
 	GlibcVersion string `json:"glibc_version,omitempty"`
+	// WatchFreed arms hardware write watchpoints on recently freed chunks.
+	WatchFreed bool `json:"watch_freed,omitempty"`
 }
 
 func DefaultConfig() Config {
@@ -274,6 +278,10 @@ const (
 	SysPread64  = 17
 	SysPwrite64 = 18
 	SysMremap   = 25
+	SysSendfile = 40
 	SysSendto   = 44
 	SysRecvfrom = 45
+	SysExecve   = 59
+	SysOpenat   = 257
+	SysSplice   = 275
 )

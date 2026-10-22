@@ -98,8 +98,17 @@ static __always_inline void gfs_emit(struct gfs_event *ev)
 	ev->tid = bpf_get_current_pid_tgid();
 	bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
 
-	if (st)
+	if (st) {
 		st->events++;
+		if (ev->type == GFS_EV_ALLOC)
+			st->allocs++;
+		else if (ev->type == GFS_EV_FREE ||
+			 ev->type == GFS_EV_DOUBLE_FREE ||
+			 ev->type == GFS_EV_INVALID_FREE)
+			st->frees++;
+		else if (ev->type == GFS_EV_MEM_ACCESS)
+			st->checks++;
+	}
 
 	if (bpf_ringbuf_output(&events, ev, sizeof(*ev), 0) && st)
 		st->drops++;
@@ -136,6 +145,15 @@ static __always_inline __u32 gfs_stack_id(struct pt_regs *ctx,
 	if (!cfg || !(cfg->flags & GFS_F_STACKS))
 		return 0;
 	return bpf_get_stackid(ctx, &stacks, BPF_F_USER_STACK);
+}
+
+static __always_inline long gfs_user_strlen(const void *ptr)
+{
+	char buf[64];
+
+	if (!ptr)
+		return 0;
+	return bpf_probe_read_user_str(buf, sizeof(buf), ptr);
 }
 
 static __always_inline void gfs_put_pending(__u32 op, __u64 size,
@@ -243,6 +261,7 @@ static __always_inline int gfs_free_common(struct pt_regs *ctx, __u32 op)
 		return 0;
 
 	a = bpf_map_lookup_elem(&allocs, &addr);
+	__u32 live = a && a->state;
 
 	if (!a) {
 		type = GFS_EV_INVALID_FREE;
@@ -256,6 +275,30 @@ static __always_inline int gfs_free_common(struct pt_regs *ctx, __u32 op)
 	ev.addr = addr;
 	ev.req_size = a ? a->req_size : 0;
 	ev.size = a ? a->chunk_size : gfs_chunk_size(addr, 0);
+
+	/*
+	 * Capture the chunk and next-chunk size words before free() modifies
+	 * them. Userspace validates alignment, bounds and PREV_INUSE to detect
+	 * metadata corruption (D8).
+	 */
+	if (live) {
+		__u64 hdr = 0;
+		__u64 next = 0;
+
+		if (!bpf_probe_read_user(&hdr, sizeof(hdr), (void *)(addr - 8))) {
+			__u64 csize = hdr & ~7ULL;
+
+			ev.aux1 = hdr;
+			ev.flags |= GFS_AF_METADATA;
+			if (csize >= 0x20 && csize <= (1ULL << 40) &&
+			    !bpf_probe_read_user(&next, sizeof(next),
+						 (void *)(addr + csize - 8))) {
+				ev.aux2 = next;
+				ev.flags |= GFS_AF_NEXT;
+			}
+		}
+	}
+
 	ev.stack_id = gfs_stack_id(ctx, cfg);
 	ev.arg1 = GFS_OP_FREE;
 	ev.arg2 = 0;
@@ -406,6 +449,48 @@ int gfs_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 		ev.size = dx;
 		ev.arg1 = id;
 		ev.arg2 = 2; /* userspace memory is read */
+		break;
+	case GFS_NR_OPENAT: {
+		long n = gfs_user_strlen((void *)si);
+
+		if (n <= 0)
+			return 0;
+		gfs_init(&ev, GFS_EV_MEM_ACCESS);
+		ev.addr = si;
+		ev.size = n;
+		ev.arg1 = id;
+		ev.arg2 = 2; /* pathname is read */
+		break;
+	}
+	case GFS_NR_EXECVE: {
+		long n = gfs_user_strlen((void *)di);
+
+		if (n <= 0)
+			return 0;
+		gfs_init(&ev, GFS_EV_MEM_ACCESS);
+		ev.addr = di;
+		ev.size = n;
+		ev.arg1 = id;
+		ev.arg2 = 2; /* pathname is read */
+		break;
+	}
+	case GFS_NR_SENDFILE:
+		if (!dx)
+			return 0;
+		gfs_init(&ev, GFS_EV_MEM_ACCESS);
+		ev.addr = dx;
+		ev.size = 8;
+		ev.arg1 = id;
+		ev.arg2 = 1; /* offset is written */
+		break;
+	case GFS_NR_SPLICE:
+		if (!si && !r10)
+			return 0;
+		gfs_init(&ev, GFS_EV_MEM_ACCESS);
+		ev.addr = si ? si : r10;
+		ev.size = 8;
+		ev.arg1 = id;
+		ev.arg2 = 1; /* offset is written */
 		break;
 	default:
 		return 0;

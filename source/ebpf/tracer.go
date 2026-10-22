@@ -80,12 +80,13 @@ type bpfTomb struct {
 	Gen       uint32
 }
 
-type bpfStats struct {
-	Events uint64
-	Drops  uint64
-	Allocs uint64
-	Frees  uint64
-	Checks uint64
+// Stats is the aggregate BPF-side event/drop accounting.
+type Stats struct {
+	Events uint64 `json:"events"`
+	Drops  uint64 `json:"drops"`
+	Allocs uint64 `json:"allocs"`
+	Frees  uint64 `json:"frees"`
+	Checks uint64 `json:"checks"`
 }
 
 // Tracer owns the embedded eBPF object and its attached links.
@@ -456,12 +457,12 @@ func (t *Tracer) HeapSnapshot() ([]core.Allocation, error) {
 }
 
 // BPFStats returns aggregate ringbuf/map counters.
-func (t *Tracer) BPFStats() (bpfStats, error) {
-	var values []bpfStats
+func (t *Tracer) BPFStats() (Stats, error) {
+	var values []Stats
 	if err := t.statsMap.Lookup(uint32(0), &values); err != nil {
-		return bpfStats{}, err
+		return Stats{}, err
 	}
-	var total bpfStats
+	var total Stats
 	for _, v := range values {
 		total.Events += v.Events
 		total.Drops += v.Drops

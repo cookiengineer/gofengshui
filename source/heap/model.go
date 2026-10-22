@@ -131,6 +131,7 @@ func (m *Model) Apply(ev core.Event) []core.Finding {
 		})
 	case core.EventFree:
 		m.applyFree(ev, false)
+		out = append(out, m.checkMetadata(ev)...)
 	case core.EventDoubleFree:
 		m.applyFree(ev, true)
 		f := core.Finding{
@@ -183,6 +184,20 @@ func (m *Model) applyAlloc(ev core.Event) []core.Finding {
 	}
 	if ev.Size == 0 {
 		ev.Size = ev.ReqSize
+	}
+	if core.AllocOp(ev.Arg2) == core.OpRealloc && ev.Arg1 != 0 {
+		if ev.Arg1 == ev.Addr {
+			if a := m.allocs[ev.Addr]; a != nil {
+				a.ReqSize = ev.ReqSize
+				if ev.Size != 0 {
+					a.ChunkSize = ev.Size
+				}
+				a.LastEventID = m.seq
+				return nil
+			}
+		} else {
+			m.freeReallocOld(ev.Arg1, ev.Timestamp, ev.TID)
+		}
 	}
 	m.removeTombstoneContaining(ev.Addr)
 
@@ -268,6 +283,13 @@ func (m *Model) addressMapped(addr uint64) bool {
 	return false
 }
 
+// Mapped reports whether addr falls inside a known target mapping.
+func (m *Model) Mapped(addr uint64) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.addressMapped(addr)
+}
+
 func (m *Model) applyFree(ev core.Event, double bool) {
 	if ev.Flags&core.EventFlagUnknown != 0 && m.allocs[ev.Addr] == nil {
 		// Unknown pointer after attach: do not fabricate a tombstone.
@@ -291,6 +313,64 @@ func (m *Model) applyFree(ev core.Event, double bool) {
 		size = 1
 	}
 	m.tombs[ev.Addr] = Tombstone{Addr: ev.Addr, Size: size, TS: ev.Timestamp.UnixNano(), TID: ev.TID}
+}
+
+// freeReallocOld folds the implicit free performed by a moving realloc into
+// the timeline so prediction and UAF checks see the old chunk.
+func (m *Model) freeReallocOld(addr uint64, ts time.Time, tid uint32) {
+	a := m.allocs[addr]
+	if a == nil {
+		return
+	}
+	a.State = core.StateFreed
+	a.FreeTS = ts.UnixNano()
+	a.LastEventID = m.seq
+	if a.ChunkSize == 0 {
+		a.ChunkSize = a.ReqSize
+	}
+	m.tombs[addr] = Tombstone{Addr: addr, Size: a.ChunkSize, TS: a.FreeTS, TID: tid}
+	m.recordFree(addr, a.ChunkSize, tid, a.FreeTS)
+}
+
+// checkMetadata validates the chunk and next-chunk size words captured at
+// free() entry. It catches corrupted size fields and cleared PREV_INUSE bits
+// that would otherwise abort inside glibc or go unnoticed.
+func (m *Model) checkMetadata(ev core.Event) []core.Finding {
+	if ev.Flags&core.EventFlagMetadata == 0 {
+		return nil
+	}
+	rawSize := ev.Aux1 &^ 7
+	var problem string
+	switch {
+	case rawSize < 0x20 || rawSize%16 != 0 || rawSize > 1<<40:
+		problem = "invalid chunk size"
+	case ev.Flags&core.EventFlagNextChunk != 0:
+		nextSize := ev.Aux2 &^ 7
+		if nextSize < 0x20 || nextSize%16 != 0 || nextSize > 1<<40 {
+			problem = "invalid next chunk size"
+		} else if ev.Aux2&1 == 0 {
+			problem = "next chunk PREV_INUSE cleared"
+		}
+	}
+	if problem == "" {
+		return nil
+	}
+	evCopy := ev
+	return []core.Finding{{
+		ID:        "D8",
+		Severity:  "high",
+		Message:   fmt.Sprintf("%s at 0x%x: size=0x%x next=0x%x", problem, ev.Addr, rawSize, ev.Aux2),
+		Event:     &evCopy,
+		Timestamp: ev.Timestamp,
+		Details: map[string]any{
+			"raw_size":   ev.Aux1,
+			"size":       rawSize,
+			"next_raw":   ev.Aux2,
+			"next_size":  ev.Aux2 &^ 7,
+			"prev_inuse": ev.Aux2&1 != 0,
+			"glibc":      m.profile.Version,
+		},
+	}}
 }
 
 func (m *Model) applyMmapRet(ev core.Event) {

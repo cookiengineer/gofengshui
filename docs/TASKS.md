@@ -53,7 +53,7 @@ Status legend: `yes`, `partial`, `no`. Updated incrementally during work.
 | M2.7 | Hardware execution breakpoints | yes | yes | yes |
 | M2.8 | Hardware read/write watchpoints | yes | yes | yes |
 | M2.9 | Single-step with control-transfer decode | yes | yes | yes |
-| M2.10 | Watch an allocation by heap ID | yes | yes | partial |
+| M2.10 | Watch an allocation by heap ID | yes | yes | yes |
 | M2.11 | Sink registration | yes | yes | yes |
 | M2.12 | Hijack watch -> single-step -> sink | yes | yes | yes |
 | M2.13 | ROP chain capture and gadget classification | yes | yes | yes |
@@ -67,21 +67,26 @@ Status legend: `yes`, `partial`, `no`. Updated incrementally during work.
 | M3.1 | Multi-thread tracing, clone hooks, per-thread debug registers | yes | yes | yes |
 | M3.2 | Stop-the-world for all traced threads | yes | yes | yes |
 | M3.3 | fork/exec follow | yes | yes | yes |
-| M3.4 | dlopen rescan / re-attach (`maps.refresh`, resolver retry) | yes | yes | partial |
+| M3.4 | dlopen rescan / re-attach (`maps.refresh`, resolver retry) | yes | yes | yes |
 | M3.5 | tcache / main_arena introspection | no | no | no |
-| M3.6 | Additional syscall coverage | partial | no | no |
+| M3.6 | Additional syscall coverage (`openat`, `execve`, `sendfile`, `splice`) | yes | yes | yes |
 | M3.7 | OOM tracepoint integration | no | no | no |
-| M3.8 | Performance/overhead benchmarks | no | no | no |
+| M3.8 | Performance/overhead benchmarks | yes | yes | yes |
 | M3.9 | musl backend | no | no | no |
 | M3.10 | Go runtime backend | no | no | no |
 | M3.11 | Docs and CI assertion DSL | yes | partial | no |
 | M3.12 | Heap-feng-shui analysis (size classes, gaps, reuse) | yes | yes | yes |
 | M3.13 | Per-process allocator uprobes covering all threads + fork/exec reattach | yes | yes | yes |
 | M3.14 | Tcache/free-list reuse prediction (`heap.predict`) | yes | yes | yes |
-| M3.15 | Attach-time main-heap backfill | yes | yes | yes |
+| M3.15 | Attach-time main-heap and thread-arena backfill | yes | yes | yes |
 | M3.16 | CLI CI expectations (`--expect-findings`, `--expect-no-findings`, `--expect-regs`) | yes | yes | yes |
-| M3.17 | glibc allocator profile detection and `--glibc-version` override | yes | yes | partial |
-| M3.18 | D7 tcache free-list link / safe-linking anomaly detector | yes | yes | partial |
+| M3.17 | glibc allocator profile detection and `--glibc-version` override | yes | yes | yes |
+| M3.18 | D7 tcache free-list link / safe-linking anomaly detector | yes | yes | yes |
+| M3.19 | D6 fault address/access via `PTRACE_GETSIGINFO` and stack hits | yes | yes | yes |
+| M3.20 | Realloc-aware heap timeline (moved and in-place) | yes | yes | yes |
+| M3.21 | Baseline diff + spray recipe (`heap.baseline`/`diff`/`recipe`) | yes | yes | yes |
+| M3.22 | D8 chunk/next-chunk metadata corruption detector | yes | yes | yes |
+| M3.23 | Automatic freed-chunk write watchpoints (`--watch-freed`) | yes | yes | yes |
 
 ## Privileged Integration Result (2026-10-22)
 
@@ -98,7 +103,13 @@ Status legend: `yes`, `partial`, `no`. Updated incrementally during work.
 
 All checks passed with status 0:
 
-- D1/D2/D3/D4/D6 findings
+- D1/D2/D3/D4/D6/D7 findings
+- detected glibc 2.39 profile and explicit 2.31 override verified
+- D6 fault address/classification + stack hits and D2 syscall-buffer checks verified
+- realloc churn, baseline diff and spray recipe verified over the privileged suite
+- thread-arena attach backfill, D8 metadata detection, and direct-UAF auto-watch verified
+- BPF event/drop accounting verified with `drops: 0`
+- dlopen rescan and allocator probe reattachment verified
 - clean malloc/free loop with zero false positives
 - heap analysis export
 - multi-thread allocations from 5 threads
@@ -122,7 +133,7 @@ Privileged suite passed with status 0:
 - attach CLI workflow
 - attach-time main-heap backfill
 - CLI expectation runner for findings and sink registers
-- resolver refresh for dlopen'ed modules (allocator reattach still pending)
+- dlopen resolver refresh and allocator probe reattachment
 
 ## Prediction Status
 
@@ -145,11 +156,9 @@ of glibc's tcache or arena structures.
 - `yes` under Tested means covered by an automated or executed local check.
 - `yes` under Verified means observed end-to-end in the relevant environment.
 - Implemented-but-not-fully-verified items:
-  - D7 tcache link detection is unit-tested and wired into the privileged suite; the next privileged rerun is pending.
   - M1.14 stdio end-to-end session driving
   - M1.17 event replay/cursor edge cases
   - M2.6 software-breakpoint trigger path
-  - M2.10 watching an allocation by heap model ID
   - M2.14 protocol `assert` command (ROP JSON is verified)
   - M2.15 CLI `attach` workflow
   - M3.11 CI assertion DSL/runner
@@ -161,12 +170,12 @@ of glibc's tcache or arena structures.
 | Item | Status |
 |---|---|
 | Software-breakpoint trigger/step/reinsert test | done |
-| Watch allocation by heap ID end-to-end | handler done; live trigger pending |
+| Watch allocation by heap ID end-to-end | done |
 | Protocol `assert` command and CI runner | done |
 | Stdio JSONL end-to-end session test | done |
 | Event replay/cursor tests | done |
-| Attach CLI workflow + attach-time heap backfill | done for main heap; thread arenas pending |
-| dlopen rescan and reattach for new libraries | resolver refresh done; allocator reattach pending |
+| Attach CLI workflow + attach-time heap backfill | done for main heap and thread arenas |
+| dlopen rescan and reattach for new libraries | done |
 
 ### P1 — Allocator depth and heap feng shui
 
@@ -175,20 +184,20 @@ of glibc's tcache or arena structures.
 | Direct tcache/main_arena/bin introspection | implement |
 | Allocator-version profiles (glibc 2.26–2.44) | done |
 | tcache poisoning / safe-linking anomaly detector (D7) | done |
-| Realloc-style free sequences in predictor | improve |
+| Realloc-style free sequences in predictor | done |
 | C++ new/delete symbol-specific probes | implement |
 | Better separation of per-arena vs per-thread bins | improve |
-| Baseline comparison and spray recipe export | implement |
+| Baseline comparison and spray recipe export | done |
 
 ### P2 — Zero-day and crash validation
 
 | Item | Status |
 |---|---|
 | Kernel OOM/memcg tracepoints | implement |
-| Fault address via `PTRACE_GETSIGINFO` | implement |
-| Additional syscall buffers (`openat`, `execve`, `sendfile`, `splice`) | implement |
-| Stack/callstack sanity checks | implement |
-| Type-confusion and heap-metadata corruption heuristics | research |
+| Fault address via `PTRACE_GETSIGINFO` | done |
+| Additional syscall buffers (`openat`, `execve`, `sendfile`, `splice`) | done |
+| Stack/callstack sanity checks | done as executable stack-window hits |
+| Type-confusion and heap-metadata corruption heuristics | D8 implemented; further heuristics research |
 | Race/TOCTOU signal correlation | research |
 
 ### P3 — Portability and performance
@@ -198,6 +207,6 @@ of glibc's tcache or arena structures.
 | musl allocator backend | implement |
 | Go runtime allocator backend | implement |
 | arm64 support | implement |
-| Overhead benchmarks and sampling controls | implement |
-| Long-running session backpressure/loss accounting | verify |
+| Overhead benchmarks and sampling controls | benchmarks added; sampling controls pending |
+| Long-running session backpressure/loss accounting | done |
 | Final packaging/docs/release artifacts | implement |

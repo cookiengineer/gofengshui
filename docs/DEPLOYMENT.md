@@ -93,8 +93,15 @@ Expected results:
 
 - double-free PoC emits a `D1` finding
 - UAF PoC emits a `D2` finding
+- syscall-buffer PoC emits `D2` through `openat`/`execve`/`sendfile`/`splice`
+- direct-UAF PoC emits `D2` through a freed-chunk hardware watchpoint
+- crash PoC emits `D6` with fault address, access classification and stack hits
 - overflow PoC emits a `D3` finding
 - tcache-poisoning PoC emits a `D7` finding
+- metadata-corruption PoC emits a `D8` finding before glibc aborts
+- realloc churn runs clean and exercises the realloc-aware timeline
+- attach backfill recovers chunks from both the main heap and thread arenas
+- dlopen plugin is resolved and allocator probes refresh via `maps.refresh`
 - `gofengshui validate` reaches `gfs_sink` with `RDI=0x4141` and exports a
   verified ROP trace to `/reports/rop`
 

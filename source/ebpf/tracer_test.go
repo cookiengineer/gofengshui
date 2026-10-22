@@ -3,6 +3,8 @@ package ebpf
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/cilium/ebpf"
@@ -68,5 +70,17 @@ func TestDecodeEvent(t *testing.T) {
 	}
 	if ev.Comm != "test" || ev.PID != 42 || ev.TID != 43 {
 		t.Fatalf("unexpected metadata: %#v", ev)
+	}
+}
+
+func TestStatsJSONTags(t *testing.T) {
+	b, err := json.Marshal(Stats{Events: 1, Drops: 0, Allocs: 2, Frees: 3, Checks: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"events":1`, `"drops":0`, `"allocs":2`, `"frees":3`, `"checks":4`} {
+		if !strings.Contains(string(b), want) {
+			t.Fatalf("stats JSON %s missing %s", b, want)
+		}
 	}
 }

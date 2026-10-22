@@ -149,7 +149,7 @@ func (a *Agent) Start(p CreateParams) (*Session, error) {
 	}
 	cfg := p.Config
 	if !cfg.Heap && !cfg.Syscalls && !cfg.UAF && !cfg.Stacks && !cfg.Detectors &&
-		!cfg.NoEBPF && !cfg.NoLibc && cfg.GlibcVersion == "" {
+		!cfg.NoEBPF && !cfg.NoLibc && cfg.GlibcVersion == "" && !cfg.WatchFreed {
 		cfg = core.DefaultConfig()
 	}
 	s, err := a.createSession(p, cfg)
@@ -180,14 +180,17 @@ func sessionID(n uint64) string {
 
 func (a *Agent) createSession(p CreateParams, cfg core.Config) (*Session, error) {
 	s := &Session{
-		agent:   a,
-		cfg:     cfg,
-		model:   heap.NewModel(),
-		stops:   make(chan debugger.Stop, 256),
-		done:    make(chan struct{}),
-		subs:    make(map[uint64]*subscriber),
-		ropDone: make(chan *ROPResult, 8),
-		started: time.Now(),
+		agent:     a,
+		cfg:       cfg,
+		model:     heap.NewModel(),
+		stops:     make(chan debugger.Stop, 256),
+		done:      make(chan struct{}),
+		subs:      make(map[uint64]*subscriber),
+		baselines: make(map[string]heap.Baseline),
+		autoWatch: make(map[uint64]bool),
+		autoAddr:  make(map[uint64]uint64),
+		ropDone:   make(chan *ROPResult, 8),
+		started:   time.Now(),
 	}
 	s.engine = detectEngine(s.model)
 

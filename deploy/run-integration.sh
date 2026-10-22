@@ -56,6 +56,88 @@ verify_profiles() {
     failed=1
   else
     require_report_grep '"profile":{' "$stdio" "session.status exposes profile" || failed=1
+    require_report_grep '"bpf":{' "$stdio" "session.status exposes BPF stats" || failed=1
+    require_report_grep '"drops":0' "$stdio" "no ringbuf drops recorded" || failed=1
+  fi
+  return "$failed"
+}
+
+verify_findings() {
+  local failed=0
+  local crash=build/reports/crash.events.jsonl
+  local syscall=build/reports/syscall_uaf.events.jsonl
+  local realloc=build/reports/realloc.events.jsonl
+  local metadata=build/reports/metadata.events.jsonl
+  local uafdirect=build/reports/uaf_direct.events.jsonl
+  local dlopen=build/reports/dlopen-refresh.json
+  local arena=build/reports/arena_backfill/heap.json
+  local stdio=build/reports/stdio.jsonl
+
+  echo "=== crash/syscall assertions ==="
+  if [ ! -s "$crash" ]; then
+    echo "FAIL: missing $crash" >&2
+    failed=1
+  else
+    require_report_grep '"id":"D6"' "$crash" "D6 crash finding present" || failed=1
+    require_report_grep 'fault=0x0 \[null\]' "$crash" "SIGSEGV fault address captured" || failed=1
+    require_report_grep '"fault_region":"null"' "$crash" "fault region classified" || failed=1
+    require_report_grep '"stack_hits"' "$crash" "crash stack window analyzed" || failed=1
+  fi
+  if [ ! -s "$syscall" ]; then
+    echo "FAIL: missing $syscall" >&2
+    failed=1
+  else
+    require_report_grep '"id":"D2"' "$syscall" "D2 syscall-buffer finding present" || failed=1
+    require_report_grep '"arg1":257' "$syscall" "openat buffer checked" || failed=1
+    require_report_grep '"arg1":59' "$syscall" "execve buffer checked" || failed=1
+    require_report_grep '"arg1":40' "$syscall" "sendfile offset checked" || failed=1
+    require_report_grep '"arg1":275' "$syscall" "splice offset checked" || failed=1
+  fi
+  if [ ! -s "$realloc" ]; then
+    echo "FAIL: missing $realloc" >&2
+    failed=1
+  elif grep -q '"kind":"finding"' "$realloc"; then
+    echo "FAIL: realloc churn produced findings" >&2
+    failed=1
+  else
+    echo "ok: realloc churn produced no findings"
+  fi
+  if [ ! -s "$metadata" ]; then
+    echo "FAIL: missing $metadata" >&2
+    failed=1
+  else
+    require_report_grep '"id":"D8"' "$metadata" "D8 metadata finding present" || failed=1
+    require_report_grep 'invalid chunk size' "$metadata" "D8 classified the corrupted size" || failed=1
+  fi
+  if [ ! -s "$uafdirect" ]; then
+    echo "FAIL: missing $uafdirect" >&2
+    failed=1
+  else
+    require_report_grep '"id":"D2"' "$uafdirect" "D2 direct UAF finding present" || failed=1
+    require_report_grep 'hardware-watchpoint' "$uafdirect" "D2 came from hardware watchpoint" || failed=1
+  fi
+  if [ ! -s "$dlopen" ]; then
+    echo "FAIL: missing $dlopen" >&2
+    failed=1
+  else
+    require_report_grep 'libgfsplugin.so' "$dlopen" "dlopen module appeared after refresh" || failed=1
+    require_report_grep '"allocator_paths"' "$dlopen" "allocator probes refreshed" || failed=1
+  fi
+  if [ ! -s "$arena" ]; then
+    echo "FAIL: missing $arena" >&2
+    failed=1
+  else
+    require_report_grep '"arenas": [1-9][0-9]*' "$arena" "thread-arena backfill scanned an arena" || failed=1
+  fi
+  if [ ! -s "$stdio" ]; then
+    echo "FAIL: missing $stdio" >&2
+    failed=1
+  else
+    require_report_grep '"type":"result","id":6' "$stdio" "heap.baseline response present" || failed=1
+    require_report_grep '"type":"result","id":7' "$stdio" "heap.diff response present" || failed=1
+    require_report_grep '"live_delta"' "$stdio" "baseline diff contains deltas" || failed=1
+    require_report_grep '"type":"result","id":8' "$stdio" "heap.recipe response present" || failed=1
+    require_report_grep '"reclaim"' "$stdio" "recipe contains reclaim plan" || failed=1
   fi
   return "$failed"
 }
@@ -115,7 +197,9 @@ set -e
 fix_reports
 profile_status=0
 verify_profiles 2>&1 | tee -a "$LOG" || profile_status=1
-if [ "$status" -eq 0 ] && [ "$profile_status" -ne 0 ]; then
+finding_status=0
+verify_findings 2>&1 | tee -a "$LOG" || finding_status=1
+if [ "$status" -eq 0 ] && { [ "$profile_status" -ne 0 ] || [ "$finding_status" -ne 0 ]; }; then
   status=1
 fi
 {

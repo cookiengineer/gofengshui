@@ -37,6 +37,8 @@ enum gfs_alloc_op {
 
 #define GFS_AF_UNKNOWN    (1U << 0)
 #define GFS_AF_LINK       (1U << 1)
+#define GFS_AF_METADATA   (1U << 2)
+#define GFS_AF_NEXT       (1U << 3)
 
 /* Default x86_64 tcache chunk-size ceiling (64 bins). */
 #define GFS_TCACHE_MAX_CHUNK 0x410
@@ -50,8 +52,12 @@ enum gfs_alloc_op {
 #define GFS_NR_PREAD64  17
 #define GFS_NR_PWRITE64 18
 #define GFS_NR_MREMAP   25
+#define GFS_NR_SENDFILE 40
 #define GFS_NR_SENDTO   44
 #define GFS_NR_RECVFROM 45
+#define GFS_NR_EXECVE   59
+#define GFS_NR_OPENAT   257
+#define GFS_NR_SPLICE   275
 
 struct gfs_config {
 	__u64 cgroup_id;

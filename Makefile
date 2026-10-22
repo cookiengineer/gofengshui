@@ -23,9 +23,18 @@ TESTBINS := $(BUILD_DIR)/testdata/alloc_loop \
             $(BUILD_DIR)/testdata/fork_exec \
             $(BUILD_DIR)/testdata/backfill \
             $(BUILD_DIR)/testdata/poison \
-            $(BUILD_DIR)/testdata/alloc_once
+            $(BUILD_DIR)/testdata/alloc_once \
+            $(BUILD_DIR)/testdata/syscall_uaf \
+            $(BUILD_DIR)/testdata/realloc_churn \
+            $(BUILD_DIR)/testdata/arena_backfill \
+            $(BUILD_DIR)/testdata/watch_alloc \
+            $(BUILD_DIR)/testdata/metadata \
+            $(BUILD_DIR)/testdata/uaf_direct \
+            $(BUILD_DIR)/testdata/dlopen_alloc
 
-.PHONY: all build generate bpf test test-c clean fmt vet
+TESTLIBS := $(BUILD_DIR)/testdata/libgfsplugin.so
+
+.PHONY: all build generate bpf test test-c bench clean fmt vet
 
 all: build
 
@@ -48,11 +57,18 @@ $(BPF_GEN): $(BPF_OBJ) source/tools/bpfgen/main.go
 test: generate
 	$(GO) test ./source/...
 
-test-c: $(TESTBINS)
+bench: generate
+	$(GO) test -run '^$$' -bench . -benchmem ./source/heap
+
+test-c: $(TESTBINS) $(TESTLIBS)
 
 $(BUILD_DIR)/testdata/%: source/testdata/c/%.c source/testdata/c/gfs_harness.h
 	@mkdir -p $(dir $@)
 	$(CC) -g -O0 -fno-omit-frame-pointer -fno-stack-protector -no-pie -pthread -o $@ $<
+
+$(BUILD_DIR)/testdata/libgfsplugin.so: source/testdata/c/gfsplugin.c
+	@mkdir -p $(dir $@)
+	$(CC) -g -O0 -shared -fPIC -o $@ $<
 
 clean:
 	rm -rf $(BUILD_DIR) $(BPF_GEN)

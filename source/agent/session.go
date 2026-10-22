@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -82,16 +83,21 @@ type Session struct {
 
 	stops chan debugger.Stop
 
-	markers  []Marker
-	backfill *heap.BackfillStats
-	sink     *SinkInfo
-	hijack   *HijackState
-	rop      *ROPState
-	lastROP  *ROPResult
-	lastSink *SinkHit
-	lastStop *debugger.Stop
-	ropDone  chan *ROPResult
-	started  time.Time
+	markers    []Marker
+	baselines  map[string]heap.Baseline
+	lastRecipe *heap.Recipe
+	autoWatch  map[uint64]bool
+	autoAddr   map[uint64]uint64
+	autoOrder  []uint64
+	backfill   *heap.BackfillStats
+	sink       *SinkInfo
+	hijack     *HijackState
+	rop        *ROPState
+	lastROP    *ROPResult
+	lastSink   *SinkHit
+	lastStop   *debugger.Stop
+	ropDone    chan *ROPResult
+	started    time.Time
 }
 
 func detectEngine(m *heap.Model) *detect.Engine { return detect.New(m) }
@@ -131,6 +137,7 @@ func (s *Session) pump() {
 				fc := f
 				s.broadcast("finding", StreamEvent{Kind: "finding", Finding: &fc})
 			}
+			s.updateAutoWatch(ev)
 		case err, ok := <-bpfErrs:
 			if !ok {
 				bpfErrs = nil
@@ -166,6 +173,9 @@ func (s *Session) handleStop(st debugger.Stop) {
 
 	s.classifyCrash(st)
 	s.hijackStop(st)
+	if s.autoWatchHit(st) {
+		return
+	}
 	s.mu.Lock()
 	rop := s.rop
 	sink := s.sink
@@ -203,25 +213,86 @@ func (s *Session) classifyCrash(st debugger.Stop) {
 	if st.Signal == 6 {
 		sev = "medium" // abort, often allocator/assertion diagnostics
 	}
+	faultValid := st.Signal == int(unix.SIGSEGV) ||
+		st.Signal == int(unix.SIGBUS) || st.Signal == int(unix.SIGILL) ||
+		st.Signal == int(unix.SIGFPE)
+	faultRegion := "unknown"
+	var faultMapped bool
+	if faultValid {
+		faultMapped = s.model.Mapped(st.FaultAddr)
+		switch {
+		case st.FaultAddr == 0:
+			faultRegion = "null"
+		case !faultMapped:
+			faultRegion = "unmapped"
+		default:
+			faultRegion = "mapped"
+		}
+	}
 	msg := fmt.Sprintf("signal %d at RIP 0x%x", st.Signal, rip)
 	if hasSym {
 		msg += fmt.Sprintf(" (%s+0x%x)", sym, off)
 	}
+	if faultValid {
+		msg += fmt.Sprintf(" fault=0x%x [%s]", st.FaultAddr, faultRegion)
+	}
 	if controlled {
 		msg += " [non-executable/controlled RIP candidate]"
 	}
+	stackHits := s.stackHits(st.Stack)
 	evCopy := core.Event{Timestamp: st.Timestamp, Type: core.EventCrash, Addr: rip, PID: uint32(st.PID), TID: uint32(st.TID)}
+	details := map[string]any{
+		"signal": st.Signal, "rip": rip, "module": mod, "symbol": sym,
+		"offset": off, "executable": executable, "controlled_rip": controlled,
+		"stack_pointer": st.Regs.RSP, "stack_pointer_mapped": s.model.Mapped(st.Regs.RSP),
+		"stack_hits": stackHits,
+	}
+	if faultValid {
+		details["fault_addr"] = st.FaultAddr
+		details["fault_code"] = st.FaultCode
+		details["fault_region"] = faultRegion
+		details["fault_access"] = faultAccess(st.FaultCode)
+	}
 	f := core.Finding{
 		ID: "D6", Severity: sev, Message: msg, Event: &evCopy, Timestamp: st.Timestamp,
-		Details: map[string]any{
-			"signal": st.Signal, "rip": rip, "module": mod, "symbol": sym,
-			"offset": off, "executable": executable, "controlled_rip": controlled,
-			"stack_pointer": st.Regs.RSP,
-		},
+		Details: details,
 	}
 	s.engine.Add(f)
 	fc := f
 	s.broadcast("finding", StreamEvent{Kind: "finding", Finding: &fc})
+}
+
+func faultAccess(code int32) string {
+	switch code {
+	case 1:
+		return "not-mapped"
+	case 2:
+		return "protection"
+	case 0x80:
+		return "kernel"
+	default:
+		return "unknown"
+	}
+}
+
+func (s *Session) stackHits(stack []uint64) []map[string]any {
+	out := make([]map[string]any, 0, 8)
+	for _, word := range stack {
+		if len(out) >= 8 {
+			break
+		}
+		if word == 0 || !s.executable(word) {
+			continue
+		}
+		mod, sym, off, ok := s.symbolize(word)
+		entry := map[string]any{"addr": word, "module": mod}
+		if ok {
+			entry["symbol"] = sym
+			entry["offset"] = off
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
 func (s *Session) broadcast(kind string, payload StreamEvent) {
@@ -321,6 +392,12 @@ func (s *Session) Handle(ctx context.Context, conn *transport.Conn, f *proto.Fra
 		s.reply(conn, f, s.model.Analyze(), nil)
 	case proto.MethodHeapPredict:
 		s.heapPredict(conn, f)
+	case proto.MethodHeapBaseline:
+		s.heapBaseline(conn, f)
+	case proto.MethodHeapDiff:
+		s.heapDiff(conn, f)
+	case proto.MethodHeapRecipe:
+		s.heapRecipe(conn, f)
 	case proto.MethodMapsRefresh:
 		s.mapsRefresh(conn, f)
 	case proto.MethodMemRead:
@@ -377,6 +454,36 @@ func (s *Session) reply(conn *transport.Conn, f *proto.Frame, result any, err *p
 	_ = conn.Write(fr)
 }
 
+// BPFStats returns the aggregate BPF event/drop counters when eBPF is active.
+func (s *Session) BPFStats() (ebpf.Stats, bool) {
+	if s.bpf == nil {
+		return ebpf.Stats{}, false
+	}
+	st, err := s.bpf.BPFStats()
+	if err != nil {
+		return ebpf.Stats{}, false
+	}
+	return st, true
+}
+
+func bpfValue(st ebpf.Stats, ok bool) any {
+	if !ok {
+		return nil
+	}
+	return st
+}
+
+func bpfValueFrom(t *ebpf.Tracer) any {
+	if t == nil {
+		return nil
+	}
+	st, err := t.BPFStats()
+	if err != nil {
+		return nil
+	}
+	return st
+}
+
 func (s *Session) currentSeq() uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -395,6 +502,7 @@ func (s *Session) status(conn *transport.Conn, f *proto.Frame) {
 		"target":    s.target,
 		"config":    s.cfg,
 		"profile":   s.model.Profile(),
+		"bpf":       bpfValueFrom(s.bpf),
 		"stats":     s.model.Stats(),
 		"backfill":  backfill,
 		"last_stop": last,
@@ -444,6 +552,70 @@ func (s *Session) heapQuery(conn *transport.Conn, f *proto.Frame) {
 	}, nil)
 }
 
+func (s *Session) heapBaseline(conn *transport.Conn, f *proto.Frame) {
+	var p struct {
+		Name string `json:"name"`
+		Path string `json:"path"`
+	}
+	_ = f.DecodeParams(&p)
+	if p.Name == "" {
+		p.Name = "default"
+	}
+	b := s.model.CaptureBaseline(p.Name)
+	s.mu.Lock()
+	if s.baselines == nil {
+		s.baselines = make(map[string]heap.Baseline)
+	}
+	s.baselines[p.Name] = b
+	s.mu.Unlock()
+	if p.Path != "" {
+		if err := export.JSON(p.Path, b); err != nil {
+			s.reply(conn, f, nil, &proto.Error{Code: "export_failed", Message: err.Error()})
+			return
+		}
+	}
+	s.reply(conn, f, map[string]any{"name": p.Name, "path": p.Path, "baseline": b}, nil)
+}
+
+func (s *Session) heapDiff(conn *transport.Conn, f *proto.Frame) {
+	var p struct {
+		Name string `json:"name"`
+	}
+	_ = f.DecodeParams(&p)
+	if p.Name == "" {
+		p.Name = "default"
+	}
+	s.mu.Lock()
+	base, ok := s.baselines[p.Name]
+	s.mu.Unlock()
+	if !ok {
+		s.reply(conn, f, nil, &proto.Error{Code: "not_found", Message: "baseline not found"})
+		return
+	}
+	current := s.model.CaptureBaseline("current")
+	s.reply(conn, f, heap.DiffBaselines(base, current), nil)
+}
+
+func (s *Session) heapRecipe(conn *transport.Conn, f *proto.Frame) {
+	var p struct {
+		TID   uint32 `json:"tid"`
+		Size  uint64 `json:"size"`
+		Count int    `json:"count"`
+	}
+	_ = f.DecodeParams(&p)
+	if p.Size == 0 {
+		p.Size = 1
+	}
+	if p.Count <= 0 {
+		p.Count = 1
+	}
+	r := s.model.BuildRecipe(p.TID, p.Size, p.Count)
+	s.mu.Lock()
+	s.lastRecipe = &r
+	s.mu.Unlock()
+	s.reply(conn, f, r, nil)
+}
+
 func (s *Session) mapsRefresh(conn *transport.Conn, f *proto.Frame) {
 	if err := s.RefreshResolver(); err != nil {
 		s.reply(conn, f, nil, &proto.Error{Code: "refresh_failed", Message: err.Error()})
@@ -454,7 +626,61 @@ func (s *Session) mapsRefresh(conn *transport.Conn, f *proto.Frame) {
 	for _, m := range r.Modules {
 		mods = append(mods, m.Path)
 	}
-	s.reply(conn, f, map[string]any{"modules": mods, "count": len(mods)}, nil)
+	paths := s.ReattachAllocators()
+	s.reply(conn, f, map[string]any{
+		"modules": mods, "count": len(mods),
+		"allocator_paths": paths, "threads": len(s.tracer.Threads()),
+	}, nil)
+}
+
+func sameFile(a, b string) bool {
+	ai, err1 := os.Stat(a)
+	bi, err2 := os.Stat(b)
+	return err1 == nil && err2 == nil && os.SameFile(ai, bi)
+}
+
+// ReattachAllocators refreshes allocator uprobes for all current threads and
+// any libc-like modules discovered after a dlopen. AttachThreadPath caches by
+// thread and path, so repeated refreshes are no-ops.
+func (s *Session) ReattachAllocators() []string {
+	if s.bpf == nil {
+		return nil
+	}
+	r := s.getResolver()
+	if r == nil {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var paths []string
+	add := func(p string) {
+		if p == "" || seen[p] {
+			return
+		}
+		seen[p] = true
+		paths = append(paths, p)
+	}
+	base := s.target.LibcPath
+	add(base)
+	for _, m := range r.Modules {
+		if !strings.Contains(filepath.Base(m.Path), "libc.so") {
+			continue
+		}
+		p := m.FSPath
+		if p == "" {
+			p = m.Path
+		}
+		if base != "" && sameFile(p, base) {
+			continue
+		}
+		add(p)
+	}
+	tids := s.tracer.Threads()
+	for _, path := range paths {
+		for _, tid := range tids {
+			_ = s.bpf.AttachThreadPath(tid, path)
+		}
+	}
+	return paths
 }
 
 func (s *Session) heapPredict(conn *transport.Conn, f *proto.Frame) {
@@ -619,6 +845,35 @@ func (s *Session) breakClear(conn *transport.Conn, f *proto.Frame) {
 	s.reply(conn, f, map[string]any{"cleared": addr}, nil)
 }
 
+func watchSizeForChunk(size uint64) uint64 {
+	switch {
+	case size >= 8:
+		return 8
+	case size >= 4:
+		return 4
+	case size >= 2:
+		return 2
+	default:
+		return 1
+	}
+}
+
+// WatchAllocation installs a hardware watchpoint on a heap-model allocation.
+func (s *Session) WatchAllocation(id, size uint64, typ debugger.WatchType) (*debugger.Watchpoint, error) {
+	a, ok := s.model.QueryID(id)
+	if !ok {
+		return nil, fmt.Errorf("allocation %d not found", id)
+	}
+	if size == 0 {
+		size = watchSizeForChunk(a.ChunkSize)
+	}
+	w := s.watcher
+	if w == nil {
+		w = s.tracer
+	}
+	return w.SetWatchpoint(a.Addr, size, typ, id)
+}
+
 func (s *Session) watchSet(conn *transport.Conn, f *proto.Frame) {
 	var p struct {
 		Addr    uint64 `json:"addr"`
@@ -627,23 +882,21 @@ func (s *Session) watchSet(conn *transport.Conn, f *proto.Frame) {
 		AllocID uint64 `json:"alloc_id"`
 	}
 	_ = f.DecodeParams(&p)
-	if p.AllocID != 0 && p.Addr == 0 {
-		a, ok := s.model.QueryID(p.AllocID)
-		if !ok {
-			s.reply(conn, f, nil, &proto.Error{Code: "not_found", Message: "allocation not found"})
-			return
-		}
-		p.Addr = a.Addr
-		if p.Size == 0 {
-			p.Size = a.ChunkSize
-		}
-	}
-	if p.Size == 0 {
-		p.Size = 8
-	}
 	typ := debugger.WatchType(p.Type)
 	if typ == "" {
 		typ = debugger.WatchAccess
+	}
+	if p.AllocID != 0 && p.Addr == 0 {
+		wp, err := s.WatchAllocation(p.AllocID, p.Size, typ)
+		if err != nil {
+			s.reply(conn, f, nil, &proto.Error{Code: "watch_failed", Message: err.Error()})
+			return
+		}
+		s.reply(conn, f, wp, nil)
+		return
+	}
+	if p.Size == 0 {
+		p.Size = 8
 	}
 	w := s.watcher
 	if w == nil {
@@ -1025,6 +1278,12 @@ func (s *Session) Export(dir string) error {
 	rop := s.lastROP
 	sink := s.lastSink
 	backfill := s.backfill
+	bpfStats, hasBPF := s.BPFStats()
+	recipe := s.lastRecipe
+	baselines := make(map[string]heap.Baseline, len(s.baselines))
+	for k, v := range s.baselines {
+		baselines[k] = v
+	}
 	markers := append([]Marker(nil), s.markers...)
 	s.mu.Unlock()
 
@@ -1042,9 +1301,20 @@ func (s *Session) Export(dir string) error {
 		"profile":     s.model.Profile(),
 		"analysis":    s.model.Analyze(),
 		"backfill":    backfill,
+		"bpf":         bpfValue(bpfStats, hasBPF),
 		"findings":    s.engine.Recent(),
 	}); err != nil {
 		return err
+	}
+	if len(baselines) > 0 {
+		if err := export.JSON(filepath.Join(dir, "baselines.json"), baselines); err != nil {
+			return err
+		}
+	}
+	if recipe != nil {
+		if err := export.JSON(filepath.Join(dir, "recipe.json"), recipe); err != nil {
+			return err
+		}
 	}
 	if rop != nil {
 		if err := export.JSON(filepath.Join(dir, "rop.json"), rop); err != nil {
@@ -1056,6 +1326,7 @@ func (s *Session) Export(dir string) error {
 		"profile": s.model.Profile(),
 		"stats":   s.model.Stats(), "sink": sink, "rop": rop,
 		"markers": markers, "backfill": backfill,
+		"bpf": bpfValue(bpfStats, hasBPF),
 	}); err != nil {
 		return err
 	}
@@ -1114,22 +1385,41 @@ func (s *Session) backfillHeap() {
 	if err != nil {
 		return
 	}
-	var start, end uint64
-	for _, m := range maps {
-		if m.Path == "[heap]" {
-			start, end = m.Start, m.End
-			break
-		}
+	reader := func(addr uint64, size int) ([]byte, error) {
+		return s.tracer.ReadMemory(addr, size)
 	}
-	if start == 0 || end <= start {
+	now := time.Now()
+	var total heap.BackfillStats
+	regions := make([]heap.Region, 0, len(maps))
+	for _, m := range maps {
+		regions = append(regions, heap.Region{Start: m.Start, End: m.End, Path: m.Path})
+		if m.Path != "[heap]" {
+			continue
+		}
+		st := s.model.BackfillHeap(m.Start, m.End, reader, now)
+		mergeBackfill(&total, st)
+	}
+	mergeBackfill(&total, s.model.BackfillThreadArenas(regions, reader, now))
+	if total.Chunks > 0 {
+		s.mu.Lock()
+		s.backfill = &total
+		s.mu.Unlock()
+	}
+}
+
+func mergeBackfill(total *heap.BackfillStats, st heap.BackfillStats) {
+	if st.Chunks == 0 {
 		return
 	}
-	st := s.model.BackfillHeap(start, end, func(addr uint64, size int) ([]byte, error) {
-		return s.tracer.ReadMemory(addr, size)
-	}, time.Now())
-	if st.Chunks > 0 {
-		s.mu.Lock()
-		s.backfill = &st
-		s.mu.Unlock()
+	total.Arenas += st.Arenas
+	total.Chunks += st.Chunks
+	total.Live += st.Live
+	total.Bytes += st.Bytes
+	total.Skipped += st.Skipped
+	if total.HeapStart == 0 {
+		total.HeapStart = st.HeapStart
+		total.HeapEnd = st.HeapEnd
+	} else if st.HeapEnd > total.HeapEnd {
+		total.HeapEnd = st.HeapEnd
 	}
 }

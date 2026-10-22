@@ -91,6 +91,7 @@ Flags for run/attach:
   --no-ebpf          diagnostic: run ptrace only, without eBPF
   --backfill         scan the main heap when attaching (default true)
   --glibc-version    override detected glibc version (e.g. 2.31)
+  --watch-freed      watch recently freed chunks for direct UAF writes
   --expect-findings  comma-separated detector IDs that must be present
   --expect-no-findings  fail if any finding is produced
   --expect-regs      validate sink registers (e.g. rdi=0x4141)
@@ -108,6 +109,7 @@ func configFlags(fs *flag.FlagSet) (*core.Config, *bool, *bool, *bool, *string, 
 	fs.BoolVar(&cfg.NoEBPF, "no-ebpf", false, "diagnostic: run ptrace only, without eBPF")
 	fs.BoolVar(&cfg.Backfill, "backfill", true, "scan the main heap when attaching")
 	fs.StringVar(&cfg.GlibcVersion, "glibc-version", "", "override detected glibc version (e.g. 2.31)")
+	fs.BoolVar(&cfg.WatchFreed, "watch-freed", false, "watch recently freed chunks for direct UAF writes")
 	pause := fs.Bool("pause", false, "pause before continuing the target")
 	jsonl := fs.Bool("jsonl", false, "serve JSONL protocol on stdin/stdout")
 	follow := fs.Bool("follow", false, "follow clone/fork/vfork")

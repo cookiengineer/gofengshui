@@ -12,6 +12,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 
@@ -76,11 +77,60 @@ type Stop struct {
 	Signal     int            `json:"signal,omitempty"`
 	Event      int            `json:"event,omitempty"`
 	Address    uint64         `json:"address,omitempty"`
+	FaultAddr  uint64         `json:"fault_addr,omitempty"`
+	FaultCode  int32          `json:"fault_code,omitempty"`
+	Stack      []uint64       `json:"stack,omitempty"`
 	Regs       core.Registers `json:"regs,omitempty"`
 	Breakpoint *Breakpoint    `json:"breakpoint,omitempty"`
 	Watchpoint *Watchpoint    `json:"watchpoint,omitempty"`
 	ExitCode   int            `json:"exit_code,omitempty"`
 	Timestamp  time.Time      `json:"ts"`
+}
+
+// ptraceSiginfo mirrors the x86_64 siginfo_t prefix. The fault address lives
+// in the first eight bytes of the union for SIGSEGV/SIGBUS/SIGILL/SIGFPE.
+type ptraceSiginfo struct {
+	Signo int32
+	Errno int32
+	Code  int32
+	_     int32
+	Addr  uint64
+	_     [104]byte
+}
+
+func crashesLike(sig int) bool {
+	switch sig {
+	case int(unix.SIGSEGV), int(unix.SIGBUS), int(unix.SIGILL),
+		int(unix.SIGFPE), int(unix.SIGABRT), int(unix.SIGSYS):
+		return true
+	}
+	return false
+}
+
+func faultSiginfo(tid int) (uint64, int32) {
+	var si ptraceSiginfo
+	_, _, errno := unix.Syscall6(unix.SYS_PTRACE, uintptr(unix.PTRACE_GETSIGINFO),
+		uintptr(tid), 0, uintptr(unsafe.Pointer(&si)), 0, 0)
+	if errno != 0 {
+		return 0, 0
+	}
+	return si.Addr, si.Code
+}
+
+func (t *Tracer) stackWindow(rsp uint64, words int) []uint64 {
+	if rsp == 0 || words <= 0 {
+		return nil
+	}
+	buf := make([]byte, words*8)
+	n, err := unix.PtracePeekData(t.pid, uintptr(rsp), buf)
+	if err != nil || n < 8 {
+		return nil
+	}
+	out := make([]uint64, 0, n/8)
+	for i := 0; i+8 <= n; i += 8 {
+		out = append(out, binary.LittleEndian.Uint64(buf[i:i+8]))
+	}
+	return out
 }
 
 type threadState struct {
@@ -493,7 +543,12 @@ func (t *Tracer) handleStop(tid int, ws unix.WaitStatus) {
 	}
 	t.mu.Unlock()
 	regs, _ := t.registersLocked(tid)
-	t.emit(Stop{TID: tid, PID: t.pid, Reason: "signal", Signal: sig, Regs: regs, Timestamp: time.Now()})
+	st := Stop{TID: tid, PID: t.pid, Reason: "signal", Signal: sig, Regs: regs, Timestamp: time.Now()}
+	if crashesLike(sig) {
+		st.FaultAddr, st.FaultCode = faultSiginfo(tid)
+		st.Stack = t.stackWindow(regs.RSP, 16)
+	}
+	t.emit(st)
 	if t.deliverSignals {
 		t.mu.Lock()
 		if ts := t.tids[tid]; ts != nil {

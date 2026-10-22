@@ -26,6 +26,7 @@ make test        # Go unit tests
 make vet
 make test-c      # build C PoCs in build/testdata
 make build       # static build/gofengshui
+make bench       # heap-model benchmarks with allocation stats
 ```
 
 Useful diagnostic runs that do not require BPF privileges:
@@ -36,7 +37,8 @@ Useful diagnostic runs that do not require BPF privileges:
 ```
 
 These exercise ptrace, allocator profile detection, and the CLI. They do not
-produce allocator or syscall events.
+produce allocator or syscall events. The unprivileged Go suite also covers a
+live allocation-ID hardware watchpoint (`TestWatchAllocationByIDLive`).
 
 ## Privileged integration loop
 
@@ -82,7 +84,23 @@ allocator profile end-to-end:
   `safe_linking: false` in a second report. That check uses the `alloc_once`
   harness, because forcing a pre-safe-linking profile on a newer libc makes
   tcache-link decoding intentionally inconsistent.
-- the stdio `session.status` result contains the active `profile`
+- the stdio `session.status` result contains the active `profile` and BPF
+  event/drop counters (`drops: 0`)
+- `syscall_uaf` reports `D2` with access events for `openat` (257), `execve`
+  (59), `sendfile` (40) and `splice` (275)
+- `crash` reports `D6` with `fault=0x0 [null]`, `fault_region: null`,
+  `fault_access: not-mapped` and a `stack_hits` list
+- the stdio session exercises `heap.baseline`, `heap.diff` and `heap.recipe`
+  and returns a diff plus a reclaim plan
+- `realloc_churn` produces no false positives while exercising moving and
+  in-place reallocs
+- `arena_backfill` recovers allocations from non-main thread arenas during
+  attach
+- `metadata` corrupts a chunk size and triggers `D8` at free() entry
+- `uaf_direct` writes to a freed chunk without a syscall and triggers D2
+  through `--watch-freed`
+- `dlopen_alloc` loads a plugin, refreshes maps/probes, and allocates again
+  after `maps.refresh`
 - `deploy/run-integration.sh` re-checks these report fields on the host and
   fails the run if they are missing
 
@@ -99,6 +117,10 @@ A successful run ends with:
 ```text
 === allocator profile assertions ===
 ok: heap.json has detected profile
+...
+=== crash/syscall assertions ===
+ok: D6 crash finding present
+ok: openat buffer checked
 ...
 === finished: ... status=0 ===
 ```

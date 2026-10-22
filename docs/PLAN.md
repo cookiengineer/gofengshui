@@ -66,7 +66,7 @@ target process
 |---|---|---|
 | allocator | uprobe/uretprobe `malloc`, `calloc`, `realloc`, `free` | requested size, pointer, header size |
 | allocator | `aligned_alloc`, `posix_memalign`, C++ new/delete | when symbols exist |
-| syscalls | raw `sys_enter` / `sys_exit` | mmap, munmap, brk, mremap, read, write |
+| syscalls | raw `sys_enter` / `sys_exit` | mmap, munmap, brk, mremap, read, write, openat, execve, sendfile, splice |
 | kernel | OOM tracepoints (later) | allocation failure context |
 | stacks | `bpf_get_stackid(BPF_F_USER_STACK)` | allocation call site |
 
@@ -118,24 +118,33 @@ Allocation {
 - Freed ranges are tombstones. Exact-start checks happen in BPF; range checks
   happen in Go on syscall events.
 - D1 double/invalid free.
-- D2 UAF read/write from syscall buffers.
+- D2 UAF read/write from syscall buffers, including `openat`, `execve`,
+  `sendfile` and `splice` offset/path pointers, plus optional auto-watchpoints
+  on recently freed chunks for direct (non-syscall) writes.
 - D3 heap overflow from access range versus allocation end.
 - D4 OOM/allocation failure (malloc NULL, mmap/mremap errno).
 - D5 sink/hijack hit (ptrace).
-- D6 crash classification (fatal signal, RIP symbolization and
-  controlled-RIP candidate flag).
+- D6 crash classification: fatal signal, RIP symbolization,
+  controlled-RIP candidate flag, `PTRACE_GETSIGINFO` fault address/access
+  classification and an executable stack-window summary.
 - Heap analysis: size-class histogram, largest live/freed chunks, address
   gaps and address reuse.
 - Allocator profiles: detect glibc 2.26–2.44 behavior from the target libc
   (`tcache`, safe-linking, tcache key, bin limits) with an explicit override.
 - Allocation prediction: profile-driven glibc request2size, per-thread tcache
   LIFO (first 7 frees), fastbin LIFO and smallbin FIFO candidate ordering.
-- Attach-time main-heap backfill, dlopen resolver refresh, stdio protocol
-  validation, software breakpoints, allocation-ID watch, and CLI CI
-  expectations all verified in the privileged suite.
+- Realloc-aware timeline: moving reallocs free the old chunk; in-place reallocs
+  preserve the allocation ID.
+- Baseline/diff snapshots and advisory spray recipes (`heap.baseline`,
+  `heap.diff`, `heap.recipe`) with JSON export.
+- Attach-time main-heap and thread-arena backfill, dlopen resolver/allocator
+  refresh, stdio protocol validation, software breakpoints, allocation-ID
+  watch, and CLI CI expectations all verified in the privileged suite.
 - D7 tcache free-list link anomalies: the BPF allocator return probe records a
   popped chunk's encoded `next` word; Go decodes safe-linking and flags links
   that leave the tracked free list or mapped memory.
+- D8 chunk metadata corruption: BPF records the chunk and next-chunk size words
+  at free() entry; Go validates alignment, bounds and PREV_INUSE.
 
 ### Sink and ROP validation
 
@@ -174,7 +183,8 @@ Core methods:
 ```
 session.create / session.close / session.status
 events.subscribe / events.cursor
-heap.query / heap.snapshot / mem.read / mem.write / regs.get / stack.get
+heap.query / heap.snapshot / heap.predict / heap.baseline / heap.diff / heap.recipe /
+mem.read / mem.write / regs.get / stack.get
 break.set / break.clear / watch.set / watch.clear
 pause / resume / step / mark
 sink.register / hijack.watch / rop.arm
@@ -266,6 +276,16 @@ Implemented and locally tested:
 - heap model, tombstones, D1/D2/D3 findings
 - glibc allocator profiles, safe-linking-aware prediction and D7 tcache link
   anomaly detection
+- realloc-aware heap timeline, baseline diffs and spray recipe generation
+- live hardware watchpoints on heap-model allocation IDs
+- opt-in automatic write watchpoints on recently freed chunks (`--watch-freed`)
+- D8 chunk/next-chunk metadata validation at free() entry
+- direct UAF writes caught by freed-chunk auto-watchpoints
+- ringbuf/drop accounting and model overhead benchmarks
+- dlopen rescan with per-thread allocator probe reattachment (`maps.refresh`)
+- attach-time thread-arena backfill with heap_info validation
+- D6 fault-address classification and stack-window summary via ptrace
+- D2 checks for openat/execve paths and sendfile/splice offset pointers
 - JSONL protocol, stdio and unix transports
 - ptrace launch/attach, pause/resume, registers, memory, single-step,
   hardware break/watchpoint installation
@@ -281,10 +301,17 @@ Privileged end-to-end verification (2026-10-22):
 - eBPF object loaded and allocator uprobes attached
 - allocator/syscall event delivery confirmed
 - D1 double-free, D2 UAF and D3 heap overflow observed on live targets
+- D7 tcache link anomaly observed on glibc 2.39; allocator detection and an
+  explicit 2.31 override verified end-to-end
+- D8 metadata corruption detected before glibc aborts
+- D6 fault address/classification, crash stack hits, and D2 checks across
+  openat/execve/sendfile/splice verified end-to-end
+- realloc churn, baseline diff and spray recipe verified end-to-end
+- thread-arena attach backfill verified end-to-end
 - ROP flow reached `gfs_sink` with `RDI=0x4141` and `verified: true`
 
 Deferred:
 
 - C++ new/delete-specific uprobes (libc malloc/free already covers most)
 - full multi-thread debug-register inheritance
-- dlopen rescan, tcache/main_arena introspection, musl/Go backends
+- tcache/main_arena introspection, musl/Go backends
