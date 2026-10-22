@@ -24,7 +24,11 @@ import (
 	"gofengshui/source/transport"
 )
 
-const Version = "0.1.0"
+var (
+	Version   = "0.1.0"
+	Commit    = "dev"
+	BuildDate = "unknown"
+)
 
 // Main runs the command-line interface and returns an exit code.
 func Main(args []string) int {
@@ -35,7 +39,14 @@ func Main(args []string) int {
 	var err error
 	switch args[0] {
 	case "version", "--version", "-v":
-		fmt.Printf("gofengshui %s\n", Version)
+		if len(args) > 1 && (args[1] == "--json" || args[1] == "-json") {
+			b, _ := json.MarshalIndent(map[string]string{
+				"version": Version, "commit": Commit, "build_date": BuildDate,
+			}, "", "  ")
+			fmt.Println(string(b))
+			return 0
+		}
+		fmt.Printf("gofengshui %s (commit %s, built %s)\n", Version, Commit, BuildDate)
 		return 0
 	case "run":
 		err = cmdRun(args[1:], "spawn")

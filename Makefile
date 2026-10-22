@@ -8,6 +8,15 @@ BPF_DIR   := bpf
 BPF_OBJ   := $(BUILD_DIR)/bpf/gofengshui.bpf.o
 BPF_GEN   := source/ebpf/object_generated.go
 BIN       := $(BUILD_DIR)/gofengshui
+VERSION   ?= 0.1.0
+COMMIT    ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+LDFLAGS   := -s -w \
+             -X gofengshui/source/cli.Version=$(VERSION) \
+             -X gofengshui/source/cli.Commit=$(COMMIT) \
+             -X gofengshui/source/cli.BuildDate=$(BUILD_DATE)
+DIST_NAME := gofengshui-$(VERSION)-linux-x86_64
+DIST_DIR  := $(BUILD_DIR)/dist/$(DIST_NAME)
 
 BPF_CFLAGS ?= -O2 -g -Wall -Werror -target bpf \
               -D__TARGET_ARCH_x86 \
@@ -37,13 +46,13 @@ TESTBINS := $(BUILD_DIR)/testdata/alloc_loop \
 
 TESTLIBS := $(BUILD_DIR)/testdata/libgfsplugin.so
 
-.PHONY: all build generate bpf test test-c bench clean fmt vet
+.PHONY: all build generate bpf test test-c bench dist clean fmt vet
 
 all: build
 
 build: generate
 	@mkdir -p $(BUILD_DIR)
-	CGO_ENABLED=0 $(GO) build $(GOFLAGS) -trimpath -ldflags '-s -w' -o $(BIN) ./source/cmd/gofengshui
+	CGO_ENABLED=0 $(GO) build $(GOFLAGS) -trimpath -ldflags '$(LDFLAGS)' -o $(BIN) ./source/cmd/gofengshui
 
 generate: $(BPF_GEN)
 
@@ -62,6 +71,16 @@ test: generate
 
 bench: generate
 	$(GO) test -run '^$$' -bench . -benchmem ./source/heap
+
+dist: build
+	rm -rf $(DIST_DIR)
+	mkdir -p $(DIST_DIR)/docs $(DIST_DIR)/deploy
+	cp -p $(BIN) $(DIST_DIR)/
+	cp -p docs/*.md $(DIST_DIR)/docs/
+	cp -p deploy/*.sh deploy/Containerfile $(DIST_DIR)/deploy/
+	tar -C $(BUILD_DIR)/dist -czf $(BUILD_DIR)/dist/$(DIST_NAME).tar.gz $(DIST_NAME)
+	cd $(BUILD_DIR)/dist && sha256sum $(DIST_NAME).tar.gz > $(DIST_NAME).tar.gz.sha256
+	@echo "release: $(BUILD_DIR)/dist/$(DIST_NAME).tar.gz"
 
 test-c: $(TESTBINS) $(TESTLIBS)
 

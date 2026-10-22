@@ -27,6 +27,7 @@ make vet
 make test-c      # build C PoCs in build/testdata
 make build       # static build/gofengshui
 make bench       # heap-model benchmarks with allocation stats
+make dist        # versioned release tarball + sha256
 ```
 
 Stack capture can be sampled on busy targets:

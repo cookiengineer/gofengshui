@@ -244,12 +244,24 @@ func (m *Model) checkTcacheLink(ev core.Event, entry freeEntry, a *core.Allocati
 
 	severity := "medium"
 	class := "unexpected tcache link"
-	if decoded%16 != 0 {
+	freeKey, isFree := m.freeLoc[decoded]
+	live := m.allocs[decoded]
+	switch {
+	case decoded%16 != 0:
 		severity = "high"
 		class = "unaligned tcache link"
-	} else if k, ok := m.freeLoc[decoded]; ok && k.Chunk == ev.Size && k.TID == entry.TID {
+	case decoded == ev.Addr:
+		severity = "high"
+		class = "tcache self-loop"
+	case live != nil && live.State == core.StateLive:
+		severity = "high"
+		class = "tcache link to live allocation"
+	case isFree && freeKey.Chunk == ev.Size && freeKey.TID == entry.TID:
 		return nil
-	} else if m.hasMaps && !m.addressMapped(decoded) {
+	case isFree:
+		severity = "high"
+		class = "cross-size-class tcache link"
+	case m.hasMaps && !m.addressMapped(decoded):
 		severity = "high"
 		class = "tcache link outside mapped memory"
 	}

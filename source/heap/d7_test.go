@@ -109,3 +109,45 @@ func TestD7PreSafeLinkingAndFlagGate(t *testing.T) {
 		t.Fatalf("expected no D7 without link flag, got %#v", fs)
 	}
 }
+
+func TestD7SelfLoop(t *testing.T) {
+	m := NewModelWithProfile(mustProfile(t, "2.44"))
+	m.SetRegions([]Region{{Start: 0x1000, End: 0x2000, Path: "[heap]"}})
+	primeTcache(t, m, 0x1000, 0x1020)
+	linkAlloc(t, m, 0x1020, 0x1000, core.EventFlagTcacheLink)
+	fs := linkAlloc(t, m, 0x1000, 0x1000, core.EventFlagTcacheLink)
+	if len(fs) != 1 || fs[0].Severity != "high" || fs[0].Details["taint"] != "tcache self-loop" {
+		t.Fatalf("expected self-loop D7, got %#v", fs)
+	}
+}
+
+func TestD7LiveTarget(t *testing.T) {
+	m := NewModelWithProfile(mustProfile(t, "2.44"))
+	m.SetRegions([]Region{{Start: 0x1000, End: 0x2000, Path: "[heap]"}})
+	m.Apply(evAt(core.EventAlloc, 1, 0x1000, 0x20, 1))
+	m.Apply(evAt(core.EventAlloc, 1, 0x1020, 0x20, 2))
+	m.Apply(evAt(core.EventAlloc, 1, 0x1040, 0x20, 3))
+	m.Apply(evAt(core.EventFree, 1, 0x1000, 0x20, 4))
+	m.Apply(evAt(core.EventFree, 1, 0x1020, 0x20, 5))
+	linkAlloc(t, m, 0x1020, 0x1000, core.EventFlagTcacheLink)
+	fs := linkAlloc(t, m, 0x1000, 0x1040, core.EventFlagTcacheLink)
+	if len(fs) != 1 || fs[0].Severity != "high" || fs[0].Details["taint"] != "tcache link to live allocation" {
+		t.Fatalf("expected live-target D7, got %#v", fs)
+	}
+}
+
+func TestD7CrossSizeClass(t *testing.T) {
+	m := NewModelWithProfile(mustProfile(t, "2.44"))
+	m.SetRegions([]Region{{Start: 0x1000, End: 0x2000, Path: "[heap]"}})
+	m.Apply(evAt(core.EventAlloc, 1, 0x1000, 0x20, 1))
+	m.Apply(evAt(core.EventAlloc, 1, 0x1020, 0x20, 2))
+	m.Apply(evAt(core.EventAlloc, 1, 0x2000, 0x40, 3))
+	m.Apply(evAt(core.EventFree, 1, 0x1000, 0x20, 4))
+	m.Apply(evAt(core.EventFree, 1, 0x1020, 0x20, 5))
+	m.Apply(evAt(core.EventFree, 1, 0x2000, 0x40, 6))
+	linkAlloc(t, m, 0x1020, 0x1000, core.EventFlagTcacheLink)
+	fs := linkAlloc(t, m, 0x1000, 0x2000, core.EventFlagTcacheLink)
+	if len(fs) != 1 || fs[0].Severity != "high" || fs[0].Details["taint"] != "cross-size-class tcache link" {
+		t.Fatalf("expected cross-size D7, got %#v", fs)
+	}
+}

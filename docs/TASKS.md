@@ -111,7 +111,7 @@ All checks passed with status 0:
 - thread-arena attach backfill, D8 metadata detection, and direct-UAF auto-watch verified
 - BPF event/drop accounting verified with `drops: 0`
 - dlopen rescan and allocator probe reattachment verified
-- C++ new/delete labelling and D9 size-mismatch detection verified
+- C++ new/delete labelling, D9 size-mismatch detection, and stack sampling verified
 - clean malloc/free loop with zero false positives
 - heap analysis export
 - multi-thread allocations from 5 threads
@@ -152,6 +152,23 @@ Privileged suite passed with status 0:
 
 It is a userspace model based on observed free/alloc events, not a direct read
 of glibc's tcache or arena structures.
+
+## Final Regression (2026-10-22)
+
+`deploy/run-integration.sh` completed with status 0 after the final changes:
+
+- allocator profile detection and 2.31 override
+- D7 tcache links (including self-loop/live/cross-size unit coverage)
+- D8/D9 chunk metadata and size-mismatch detection
+- D2 syscall buffers, D6 fault info/stack hits, direct-UAF auto-watch
+- realloc churn, baseline/diff and recipe
+- main-heap and thread-arena attach backfill
+- C++ new/delete labelling and dlopen probe reattachment
+- BPF stats with zero ring-buffer drops and sampled stack capture
+- privileged host gates for every item above
+
+Release packaging (`make dist`) is verified locally and is not part of the
+privileged container suite.
 
 ## Verification Notes
 
@@ -211,4 +228,4 @@ of glibc's tcache or arena structures.
 | arm64 support | implement |
 | Overhead benchmarks and sampling controls | done |
 | Long-running session backpressure/loss accounting | done |
-| Final packaging/docs/release artifacts | implement |
+| Final packaging/docs/release artifacts | done |

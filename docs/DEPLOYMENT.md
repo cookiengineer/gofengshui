@@ -30,6 +30,28 @@ make test           # Go unit tests
 
 The final binary is statically linked and embeds the BPF object.
 
+## Release artifacts
+
+```sh
+make dist
+```
+
+This builds the static binary with embedded version/commit/date metadata and
+writes:
+
+```text
+build/dist/gofengshui-<version>-linux-x86_64.tar.gz
+build/dist/gofengshui-<version>-linux-x86_64.tar.gz.sha256
+```
+
+The archive contains the binary, `docs/`, and `deploy/`. Override the version
+with `make dist VERSION=0.2.0`. Inspect the embedded metadata with:
+
+```sh
+gofengshui version
+gofengshui version --json
+```
+
 ## Check the host
 
 ```sh

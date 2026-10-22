@@ -142,7 +142,8 @@ Allocation {
   watch, and CLI CI expectations all verified in the privileged suite.
 - D7 tcache free-list link anomalies: the BPF allocator return probe records a
   popped chunk's encoded `next` word; Go decodes safe-linking and flags links
-  that leave the tracked free list or mapped memory.
+  that leave the tracked free list or mapped memory, self-loops, links to live
+  allocations, and cross-size-class links.
 - D8 chunk metadata corruption: BPF records the chunk and next-chunk size words
   at free() entry; Go validates alignment, bounds and PREV_INUSE.
 - D9 size-field mismatch: the free-time header size is compared with the size
@@ -285,6 +286,7 @@ Implemented and locally tested:
 - D9 allocated-vs-free chunk size consistency checks
 - direct UAF writes caught by freed-chunk auto-watchpoints
 - ringbuf/drop accounting, stack sampling controls and model benchmarks
+- versioned release artifacts (`make dist`) with checksums
 - dlopen rescan with per-thread allocator probe reattachment (`maps.refresh`)
 - C++ new/delete labelling for libstdc++ allocations
 - attach-time thread-arena backfill with heap_info validation
