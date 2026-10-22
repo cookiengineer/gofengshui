@@ -178,9 +178,15 @@ Validation:
 
 - Sink hit at registered address.
 - Argument registers match assertions.
-- Chain entries are in executable mappings or known data regions.
+- The trace must leave the start address (start and sink may not be equal) and
+  execute at least one control-transfer gadget before the sink.
+- Executable chain entries must decode as valid gadgets; when a chain base is
+  supplied, the chain must contain the start and sink addresses. Data words
+  are allowed.
 - Gadgets are classified by disassembly.
 - A legitimate sink call without a hijack path is not accepted.
+- A signal, exit, or max-step stop before the sink is not verified and does not
+  produce a sink hit.
 
 Without a hijack slot or a chain base/start, only the sink hit and stack window
 can be proven.

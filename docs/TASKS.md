@@ -205,6 +205,7 @@ privileged container suite.
 | Event replay/cursor tests | done |
 | Attach CLI workflow + attach-time heap backfill | done for main heap and thread arenas |
 | dlopen rescan and reattach for new libraries | done |
+| ROP trace soundness: no sink hit on failed traces, start/sink separation, control-flow and chain checks | done (unit-tested) |
 
 ### P1 — Allocator depth and heap feng shui
 

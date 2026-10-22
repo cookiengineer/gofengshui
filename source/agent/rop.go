@@ -117,14 +117,26 @@ type ROPState struct {
 	Started time.Time `json:"started"`
 }
 
+// ROPValidation records the individual checks that decided whether a trace is
+// accepted as a ROP chain.
+type ROPValidation struct {
+	SinkReached  bool     `json:"sink_reached"`
+	StartValid   bool     `json:"start_valid"`
+	ControlFlow  bool     `json:"control_flow"`
+	ChainChecked bool     `json:"chain_checked"`
+	ChainValid   bool     `json:"chain_valid"`
+	Issues       []string `json:"issues,omitempty"`
+}
+
 // ROPResult is the validated/finished chain trace.
 type ROPResult struct {
-	Sink      *SinkHit            `json:"sink,omitempty"`
-	Steps     []ROPStep           `json:"steps"`
-	Chain     []disasm.ChainEntry `json:"chain,omitempty"`
-	Verified  bool                `json:"verified"`
-	Error     string              `json:"error,omitempty"`
-	Timestamp time.Time           `json:"ts"`
+	Sink       *SinkHit            `json:"sink,omitempty"`
+	Steps      []ROPStep           `json:"steps"`
+	Chain      []disasm.ChainEntry `json:"chain,omitempty"`
+	Validation *ROPValidation      `json:"validation,omitempty"`
+	Verified   bool                `json:"verified"`
+	Error      string              `json:"error,omitempty"`
+	Timestamp  time.Time           `json:"ts"`
 }
 
 type sinkParams struct {
@@ -298,6 +310,10 @@ func (s *Session) ropArm(conn *transport.Conn, f *proto.Frame) {
 		s.reply(conn, f, nil, &proto.Error{Code: "bad_params", Message: "start or start_symbol required; use hijack.watch for automatic start"})
 		return
 	}
+	if p.Start == sinkAddr {
+		s.reply(conn, f, nil, &proto.Error{Code: "bad_params", Message: "start must differ from the sink address"})
+		return
+	}
 	if p.MaxSteps <= 0 {
 		p.MaxSteps = 512
 	}
@@ -459,7 +475,14 @@ func (s *Session) finishROP(rop *ROPState, st debugger.Stop, reason string) {
 	if os.Getenv("GFS_PTRACE_LOG") != "" {
 		fmt.Fprintf(os.Stderr, "gfs-rop: finish reason=%q rip=0x%x steps=%d\n", reason, st.Regs.RIP, len(rop.Steps))
 	}
-	sink := s.captureSink(st)
+	// A sink hit is only evidence when the trace actually stopped at the
+	// sink. Failed traces (signal, exit, max steps) must not be reported as
+	// sink hits, otherwise a crash before the sink could satisfy a sink
+	// assertion.
+	var sink *SinkHit
+	if reason == "" {
+		sink = s.captureSink(st)
+	}
 	var chain []disasm.ChainEntry
 	if rop.ChainBase != 0 {
 		words := rop.ChainLen
@@ -468,13 +491,29 @@ func (s *Session) finishROP(rop *ROPState, st debugger.Stop, reason string) {
 		}
 		chain, _ = s.chain(rop.ChainBase, words)
 	}
-	result := &ROPResult{
-		Sink: sink, Steps: rop.Steps, Chain: chain, Timestamp: time.Now(),
+	if chain == nil && sink != nil {
+		// A sink may have been registered with its own chain base. Use the
+		// chain captured with the sink hit when the trace did not name one.
+		chain = sink.Chain
 	}
-	if reason == "" {
-		result.Verified = sink != nil && len(rop.Steps) > 0
-	} else {
-		result.Error = reason
+	s.mu.Lock()
+	registeredSink := s.sink
+	s.mu.Unlock()
+	chainExpected := rop.ChainBase != 0 ||
+		(sink != nil && registeredSink != nil && registeredSink.ChainBase != 0)
+	validation := validateROPTrace(rop.Start, rop.SinkAddr, sink, rop.Steps, chain, chainExpected, reason)
+	result := &ROPResult{
+		Sink: sink, Steps: rop.Steps, Chain: chain,
+		Validation: validation, Timestamp: time.Now(),
+	}
+	result.Verified = validation.SinkReached && validation.StartValid &&
+		validation.ControlFlow && validation.ChainValid
+	if !result.Verified {
+		if reason != "" {
+			result.Error = reason
+		} else if len(validation.Issues) > 0 {
+			result.Error = strings.Join(validation.Issues, "; ")
+		}
 	}
 
 	s.mu.Lock()
@@ -501,6 +540,104 @@ func (s *Session) finishROP(rop *ROPState, st debugger.Stop, reason string) {
 	s.broadcast("rop", StreamEvent{Kind: "rop", ROP: result})
 }
 
+// validateROPTrace applies the structural checks used for ROP verification.
+// It is deliberately independent of the tracer so it can be unit tested.
+func validateROPTrace(start, sinkAddr uint64, sink *SinkHit, steps []ROPStep, chain []disasm.ChainEntry, chainExpected bool, reason string) *ROPValidation {
+	v := &ROPValidation{}
+	issue := func(format string, args ...any) {
+		v.Issues = append(v.Issues, fmt.Sprintf(format, args...))
+	}
+
+	if reason != "" {
+		issue("%s", reason)
+	}
+	v.SinkReached = reason == "" && sink != nil && sink.Addr == sinkAddr &&
+		sink.RIP == sinkAddr && len(steps) > 0 && steps[len(steps)-1].RIP == sinkAddr
+	if !v.SinkReached {
+		issue("sink not reached")
+	}
+
+	switch {
+	case start == 0:
+		issue("start address missing")
+	case sinkAddr == 0:
+		issue("sink address missing")
+	case start == sinkAddr:
+		issue("start equals sink")
+	case len(steps) < 2:
+		issue("trace did not leave the start address")
+	case steps[0].RIP != start:
+		issue("first step 0x%x is not the start 0x%x", steps[0].RIP, start)
+	default:
+		v.StartValid = true
+	}
+
+	for i := 0; i < len(steps)-1; i++ {
+		g := steps[i].Gadget
+		if g != nil && (g.Ret || g.Call || g.Jump || g.Syscall) {
+			v.ControlFlow = true
+			break
+		}
+	}
+	if !v.ControlFlow {
+		issue("no control-transfer gadget observed before the sink")
+	}
+
+	v.ChainChecked = chainExpected || len(chain) > 0
+	v.ChainValid = true
+	if v.ChainChecked {
+		if chainExpected && len(chain) == 0 {
+			v.ChainValid = false
+			issue("chain buffer could not be read")
+		} else {
+			var sawStart, sawSink, startExecutable, sinkExecutable bool
+			for _, entry := range chain {
+				if entry.Value == start {
+					sawStart = true
+					startExecutable = startExecutable || entry.Executable
+				}
+				if entry.Value == sinkAddr {
+					sawSink = true
+					sinkExecutable = sinkExecutable || entry.Executable
+				}
+				if entry.Value == 0 {
+					continue
+				}
+				if entry.Executable {
+					if entry.Error != "" || entry.Gadget == nil || !entry.Gadget.Valid {
+						v.ChainValid = false
+						issue("chain entry %d at 0x%x is not a valid gadget", entry.Index, entry.Value)
+					}
+				}
+			}
+			if !sawStart {
+				v.ChainValid = false
+				issue("chain does not contain the start address")
+			} else if !startExecutable {
+				v.ChainValid = false
+				issue("chain start address 0x%x is not executable", start)
+			}
+			if !sawSink {
+				v.ChainValid = false
+				issue("chain does not contain the sink address")
+			} else if !sinkExecutable {
+				v.ChainValid = false
+				issue("chain sink address 0x%x is not executable", sinkAddr)
+			}
+		}
+	}
+	return v
+}
+
+// sinkReached reports whether the current stop is at the sink. A signal or
+// failure stop elsewhere must never be attributed to the sink.
+func sinkReached(addr uint64, st debugger.Stop) bool {
+	if addr == 0 {
+		return false
+	}
+	return st.Regs.RIP == addr || st.Address == addr
+}
+
 func (s *Session) captureSink(st debugger.Stop) *SinkHit {
 	s.mu.Lock()
 	info := s.sink
@@ -509,7 +646,7 @@ func (s *Session) captureSink(st debugger.Stop) *SinkHit {
 	if info == nil && ropState != nil {
 		info = &SinkInfo{Name: "sink", Addr: ropState.SinkAddr, ChainBase: ropState.ChainBase, ChainLen: ropState.ChainLen}
 	}
-	if info == nil {
+	if info == nil || !sinkReached(info.Addr, st) {
 		return nil
 	}
 	hit := &SinkHit{
@@ -589,6 +726,9 @@ func (s *Session) ArmROP(startSymbol string, start, chainBase uint64, chainLen, 
 	s.mu.Unlock()
 	if sinkAddr == 0 {
 		return nil, fmt.Errorf("register a sink first")
+	}
+	if start == sinkAddr {
+		return nil, fmt.Errorf("start must differ from the sink address")
 	}
 	if chainLen <= 0 {
 		chainLen = 64

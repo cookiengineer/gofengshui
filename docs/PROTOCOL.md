@@ -227,6 +227,22 @@ When the slot is consumed, the agent single-steps until the sink breakpoint,
 records the control flow, disassembles gadgets, optionally reads the chain
 buffer, and emits a `rop` event with `verified: true/false`.
 
+A trace is only `verified: true` when:
+
+- the sink was reached at the registered address,
+- the start address differs from the sink and the trace left the start,
+- at least one control-transfer gadget executed before the sink, and
+- when `chain_base` is supplied, the captured chain contains both the start and
+  sink addresses and every executable entry decodes as a valid gadget (an
+  unreadable chain buffer is rejected). Data words in the chain (for example
+  `0x4141`) are allowed.
+
+A signal, exit, or max-step stop before the sink is never reported as a sink
+hit: it emits no `sink` event, sets no last-sink result, and yields
+`verified: false`. `validation` reports the individual checks
+(`sink_reached`, `start_valid`, `control_flow`, `chain_checked`,
+`chain_valid`) plus `issues`, and `error` carries the failure reason.
+
 ## Wait, assertions, export
 
 ```json
