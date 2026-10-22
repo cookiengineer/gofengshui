@@ -1,0 +1,10 @@
+FROM docker.io/library/ubuntu:24.04
+
+RUN mkdir -p /opt/gfs/testdata /reports
+COPY build/gofengshui /usr/local/bin/gofengshui
+COPY build/testdata/ /opt/gfs/testdata/
+COPY deploy/in-container-tests.sh /usr/local/bin/gfs-tests
+RUN chmod +x /usr/local/bin/gofengshui /usr/local/bin/gfs-tests
+
+WORKDIR /opt/gfs
+CMD ["/bin/bash"]
