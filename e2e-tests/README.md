@@ -14,6 +14,9 @@ Run the full suite as root:
 sudo -E make e2e
 ```
 
+`make e2e` passes `-count=1`; do not rely on cached results when invoking the
+host tests directly.
+
 The glibc base-image matrix runs as part of the suite. Use
 `GFS_E2E_PULL=1` when missing base images may be pulled.
 

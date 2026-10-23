@@ -69,7 +69,7 @@ Go harness invokes `podman` directly without per-command `sudo`.
 
 - checks that the invoking user is root and fails with
   `sudo -E make e2e` otherwise
-- runs `go -C e2e-tests test -p 1 -v ./...`
+- runs `go -C e2e-tests test -count=1 -p 1 -timeout=60m -v ./...`
 - writes a timestamped log to `build/logs/e2e-*.log`
 - updates the `build/logs/latest-e2e.log` symlink
 - restores ownership of `build/e2e`, `build/logs`, `build/gofengshui`,

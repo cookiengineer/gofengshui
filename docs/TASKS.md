@@ -143,6 +143,10 @@ assertions. The glibc matrix was skipped because it was still opt-in at the
 time; musl was skipped because `alpine:3.20` was not present in the rootful
 image store.
 
+The host e2e tests depend on external container state, so `make e2e` now passes
+`-count=1`. Earlier repeated runs completed quickly because Go replayed cached
+package results even though the log still showed the previous podman commands.
+
 ### E2E coverage gaps
 
 - The glibc e2e case does not yet exercise `heap.introspect`, `heap.predict`,

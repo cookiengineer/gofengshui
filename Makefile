@@ -80,7 +80,7 @@ e2e:
 	@test "$$(id -u)" = "0" || { echo "e2e tests must run as root; use: sudo -E make e2e"; exit 1; }
 	@mkdir -p $(BUILD_DIR)/logs
 	@log="$$(pwd)/$(E2E_LOG)"; ln -sfn "$$log" $(BUILD_DIR)/logs/latest-e2e.log; \
-	  $(GO) -C $(E2E_DIR) test -p 1 -timeout=60m -v ./... 2>&1 | tee -a "$$log"; status=$${PIPESTATUS[0]}; \
+	  $(GO) -C $(E2E_DIR) test -count=1 -p 1 -timeout=60m -v ./... 2>&1 | tee -a "$$log"; status=$${PIPESTATUS[0]}; \
 	  chown -R "$${SUDO_UID:-0}:$${SUDO_GID:-0}" $(BUILD_DIR)/e2e $(BUILD_DIR)/logs $(BUILD_DIR)/gofengshui $(BUILD_DIR)/bpf source/ebpf/object_generated.go 2>/dev/null || true; \
 	  exit $$status
 
