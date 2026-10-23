@@ -75,10 +75,11 @@ the container, executes it, and then validates the exported reports from the
 host. Running `make e2e` without `sudo` exits at the root guard and does not
 create a new log.
 
-Run the glibc base-image matrix, and allow pulling missing base images:
+The glibc base-image matrix runs as part of the suite. Allow pulling missing
+base images with:
 
 ```sh
-sudo -E GFS_E2E_MATRIX=1 GFS_E2E_PULL=1 make e2e
+sudo -E GFS_E2E_PULL=1 make e2e
 ```
 
 Pull the Alpine image for the musl case:
@@ -105,7 +106,6 @@ Useful environment variables:
 - `GFS_BPF_LOG=1` includes eBPF verifier output.
 - `GFS_MEMORY_LIMIT` overrides the container memory limit (default `2g`).
 - `GFS_E2E_KEEP=1` keeps the test container for inspection.
-- `GFS_E2E_MATRIX=1` enables the glibc base-image matrix.
 - `GFS_E2E_PULL=1` allows pulling missing base images.
 - `GFS_IMAGE_PREFIX` and `GFS_IMAGE_TAG` override image naming.
 - `GFS_REPO_ROOT` overrides repository-root discovery.

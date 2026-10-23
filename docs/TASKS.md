@@ -128,8 +128,8 @@ exposed several harness/detector issues that are now fixed:
   allocating after the session attaches, and filters test-process noise.
 - the OOM container sets `memory.oom.group=0` so a bounded OOM kill does not
   take down the Go test process.
-- the glibc matrix is opt-in (`GFS_E2E_MATRIX=1`) and missing base images skip
-  or fail fast instead of triggering long registry retries.
+- the glibc matrix runs by default; missing base images skip or fail fast
+  instead of triggering long registry retries.
 
 Second privileged run (2026-10-23): the glibc victim suite and host report
 assertions passed except the attach case. It captured zero allocations because
@@ -139,9 +139,9 @@ seconds; the attach case now uses it.
 
 Third privileged run (2026-10-23): the full glibc case passed, including attach,
 all detector/profile/concurrency/protocol/ROP/OOM subtests, and the host report
-assertions. The glibc matrix was skipped because `GFS_E2E_MATRIX` was not set;
-musl was skipped because `alpine:3.20` was not present in the rootful image
-store.
+assertions. The glibc matrix was skipped because it was still opt-in at the
+time; musl was skipped because `alpine:3.20` was not present in the rootful
+image store.
 
 ### E2E coverage gaps
 
@@ -150,7 +150,7 @@ store.
   `regs.get`/`stack.get`, explicit breakpoint/watchpoint protocol calls, the
   `gofengshui ctl` CLI, or `--no-ebpf`.
 - The matrix now runs the full glibc victim suite and host report assertions
-  per base image, but it is opt-in and has not yet been verified end-to-end.
+  per base image by default, but it has not yet been verified end-to-end.
 - The musl case covers allocator tracing, D1/D2/D4/D6, threads, fork/exec, and
   the unix-socket protocol. It does not yet cover D3, ROP, OOM, attach/backfill,
   stdio, dlopen, C++, heap analysis, or allocator introspection.

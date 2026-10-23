@@ -14,13 +14,8 @@ Run the full suite as root:
 sudo -E make e2e
 ```
 
-The glibc base-image matrix is opt-in:
-
-```sh
-sudo -E GFS_E2E_MATRIX=1 make e2e
-```
-
-Use `GFS_E2E_PULL=1` when missing base images may be pulled.
+The glibc base-image matrix runs as part of the suite. Use
+`GFS_E2E_PULL=1` when missing base images may be pulled.
 
 Run only the unprivileged harness/unit checks:
 

@@ -47,9 +47,6 @@ func TestGlibc(t *testing.T) {
 
 func TestGlibcMatrix(t *testing.T) {
 	harness.RequireRoot(t)
-	if !harness.EnvBool("GFS_E2E_MATRIX") {
-		t.Skip("set GFS_E2E_MATRIX=1 to run the glibc base-image matrix")
-	}
 	run := harness.NewRun(t)
 	cases := []caseSpec{
 		{name: "glibc-ubuntu-20.04", variant: "ubuntu-20.04", baseImage: "ubuntu:20.04", safeLinking: false},

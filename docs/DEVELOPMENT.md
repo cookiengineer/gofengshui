@@ -107,23 +107,15 @@ fixtures inside the container. The binary name deliberately matches the agent's
 syscalls. Host-side report assertions run in a separate subtest, so they still
 execute when an individual victim scenario fails.
 
-The glibc case can also run a base-image matrix (`ubuntu:20.04`,
-`ubuntu:22.04`, `debian:12`) against the full glibc victim suite, including
-concurrency, protocol, ROP, and OOM, plus the host-side report assertions. The
-matrix is opt-in because those base images and their build dependencies may
-need to be pulled:
-
-```sh
-sudo -E GFS_E2E_MATRIX=1 make e2e
-```
-
-Optional cases skip early when their base image is not available locally; the
-default glibc case fails fast with a pull hint. Set `GFS_E2E_PULL=1` to allow
-podman to pull missing base images. The musl case uses Alpine and currently
-covers allocation tracing, D1/D2/D4/D6, threads, fork/exec, and the unix-socket
-protocol. Glibc-only tcache/metadata checks are intentionally not asserted for
-musl. The OOM case runs with `memory.oom.group=0` so only the bounded victim is
-killed.
+The glibc case runs a base-image matrix (`ubuntu:20.04`, `ubuntu:22.04`,
+`debian:12`) against the full glibc victim suite, including concurrency,
+protocol, ROP, and OOM, plus the host-side report assertions. Matrix cases skip
+early when their base image is not available locally; the default glibc case
+fails fast with a pull hint. Set `GFS_E2E_PULL=1` to allow podman to pull
+missing base images. The musl case uses Alpine and currently covers allocation
+tracing, D1/D2/D4/D6, threads, fork/exec, and the unix-socket protocol.
+Glibc-only tcache/metadata checks are intentionally not asserted for musl. The
+OOM case runs with `memory.oom.group=0` so only the bounded victim is killed.
 
 ## Environment variables
 
@@ -131,7 +123,6 @@ killed.
 - `GFS_BPF_LOG=1` includes the eBPF verifier log (default in the harness).
 - `GFS_MEMORY_LIMIT` sets the container memory limit (default `2g`).
 - `GFS_E2E_KEEP=1` keeps the test container after the test for inspection.
-- `GFS_E2E_MATRIX=1` enables the glibc base-image matrix.
 - `GFS_E2E_PULL=1` allows podman to pull missing base images.
 - `GFS_IMAGE_PREFIX` overrides the image prefix.
 - `GFS_IMAGE_TAG` overrides the per-case image tag.
@@ -199,5 +190,4 @@ process-global, and the OOM test imposes a container memory limit.
 - Stale image after changing Go or C sources: rerun without
   `GFS_SKIP_BUILD=1`.
 - Matrix or musl case skipped: the base image is not local. Set
-  `GFS_E2E_PULL=1` or pre-pull the image; use `GFS_E2E_MATRIX=1` for the
-  matrix.
+  `GFS_E2E_PULL=1` or pre-pull the image.
