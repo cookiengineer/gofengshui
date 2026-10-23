@@ -31,7 +31,7 @@ func (e *Engine) Observe(ev core.Event) []core.Finding {
 	defer e.mu.Unlock()
 	var out []core.Finding
 	for _, f := range findings {
-		key := fmt.Sprintf("%s/%d/%d/%x/%d", f.ID, f.Event.Type, f.Event.TID, f.Event.Addr, f.Event.Size)
+		key := fmt.Sprintf("%s/%d/%d/%x/%d/%d/%d/%x", f.ID, f.Event.Type, f.Event.TID, f.Event.Addr, f.Event.Size, f.Event.Arg1, f.Event.Arg2, f.Event.Caller)
 		if e.seen[key] > 0 {
 			continue
 		}

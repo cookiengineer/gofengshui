@@ -4,14 +4,14 @@
 
 The normal development loop is unprivileged. Loading eBPF requires `CAP_BPF`
 and `CAP_PERFMON`, and this host has `unprivileged_bpf_disabled=2`, so the
-privileged integration suite is executed by the human developer.
+privileged e2e suite must be executed as root by the human developer.
 
 The intended handoff is:
 
 1. The agent prepares changes and runs the unprivileged checks.
-2. The developer runs `deploy/run-integration.sh`.
-3. The agent reads `build/logs/latest.log` and the reports under
-   `build/reports/` and continues from the result.
+2. The developer runs `sudo -E make e2e`.
+3. The agent reads the latest e2e log under `build/logs/` and the per-test
+   artifacts under `build/e2e/`, then continues from the result.
 
 The agent does not need interactive `sudo` access; it needs the log files.
 
@@ -28,6 +28,12 @@ make test-c      # build C PoCs in build/testdata
 make build       # static build/gofengshui
 make bench       # heap-model benchmarks with allocation stats
 make dist        # versioned release tarball + sha256
+```
+
+The e2e module also has unprivileged unit tests for the harness itself:
+
+```sh
+go -C e2e-tests test ./internal/...
 ```
 
 Stack capture can be sampled on busy targets:
@@ -47,125 +53,151 @@ These exercise ptrace, allocator profile detection, and the CLI. They do not
 produce allocator or syscall events. The unprivileged Go suite also covers a
 live allocation-ID hardware watchpoint (`TestWatchAllocationByIDLive`).
 
-## Privileged integration loop
+## Privileged e2e loop
 
 The developer runs:
 
 ```sh
-deploy/run-integration.sh
+sudo -E make e2e
 ```
 
-The script:
+The suite is a separate Go module in `e2e-tests/`. It must run as root because
+rootful podman is required on hosts with `unprivileged_bpf_disabled=2`, and the
+Go harness invokes `podman` directly without per-command `sudo`.
 
-- removes old reports and restores report ownership through `sudo`
-- rebuilds the binary, C PoCs, and rootful container image unless
-  `GFS_SKIP_BUILD=1` is set
-- runs `deploy/in-container-tests.sh` as `/usr/local/bin/gfs-tests` in a
-  privileged container with host BTF mounted
-- writes the host log to `build/logs/integration-<timestamp>.log` and updates
-  the `build/logs/latest.log` symlink
-- writes the container log to `build/reports/integration.log`
-- runs host-side assertions over the generated reports
+`make e2e`:
 
-Iterating without rebuilding the image:
+- checks that the invoking user is root and fails with
+  `sudo -E make e2e` otherwise
+- runs `go -C e2e-tests test -p 1 -v ./...`
+- writes a timestamped log to `build/logs/e2e-*.log`
+- updates the `build/logs/latest-e2e.log` symlink
+- restores ownership of `build/e2e`, `build/logs`, `build/gofengshui`,
+  `build/bpf`, and `source/ebpf/object_generated.go` to the invoking
+  `SUDO_UID`/`SUDO_GID`
+
+Each case has its own directory:
+
+```text
+e2e-tests/
+  glibc/
+    Containerfile
+    glibc_test.go      # //go:build !victim; podman orchestration
+    victim_test.go     # //go:build victim; runs inside the container
+  musl/
+    Containerfile
+    musl_test.go
+    victim_test.go
+  internal/harness/    # root guard, podman, images, logs, command tracing
+  internal/checks/     # JSON/JSONL/report assertions
+  internal/agentrun/   # agent, fixture, and protocol helpers
+```
+
+The host test builds the case image, compiles the victim test binary with:
 
 ```sh
-GFS_SKIP_BUILD=1 deploy/run-integration.sh
+CGO_ENABLED=0 go -C e2e-tests test -c -tags victim \
+  -o build/e2e/<run>/<case>/glibc.victim.test ./glibc
 ```
 
-Enabling the eBPF verifier log:
+then copies it into the container as `/opt/gfs/e2e/gofengshui` and runs it with
+`podman exec ... -test.v`. The victim test invokes `gofengshui` and the C
+fixtures inside the container. The binary name deliberately matches the agent's
+`comm` so the agent's existing self-event filter drops the Go test process's own
+syscalls. Host-side report assertions run in a separate subtest, so they still
+execute when an individual victim scenario fails.
+
+The glibc case can also run a base-image matrix (`ubuntu:20.04`,
+`ubuntu:22.04`, `debian:12`) against the full glibc victim suite, including
+concurrency, protocol, ROP, and OOM, plus the host-side report assertions. The
+matrix is opt-in because those base images and their build dependencies may
+need to be pulled:
 
 ```sh
-GFS_BPF_LOG=1 deploy/run-integration.sh
+sudo -E GFS_E2E_MATRIX=1 make e2e
 ```
 
-## What the suite verifies
+Optional cases skip early when their base image is not available locally; the
+default glibc case fails fast with a pull hint. Set `GFS_E2E_PULL=1` to allow
+podman to pull missing base images. The musl case uses Alpine and currently
+covers allocation tracing, D1/D2/D4/D6, threads, fork/exec, and the unix-socket
+protocol. Glibc-only tcache/metadata checks are intentionally not asserted for
+musl. The OOM case runs with `memory.oom.group=0` so only the bounded victim is
+killed.
 
-In addition to D1–D4/D6/D7 and the ROP/sink flows, the suite now verifies the
-allocator profile end-to-end:
+## Environment variables
 
-- `poison` detects the container libc version from its metadata and records
-  `source: libc-string`, `tcache: true`, and `safe_linking: true` in
-  `heap.json`
-- `--glibc-version 2.31` produces `version: 2.31`, `source: override`, and
-  `safe_linking: false` in a second report. That check uses the `alloc_once`
-  harness, because forcing a pre-safe-linking profile on a newer libc makes
-  tcache-link decoding intentionally inconsistent.
-- the stdio `session.status` result contains the active `profile` and BPF
-  event/drop counters (`drops: 0`)
-- `syscall_uaf` reports `D2` with access events for `openat` (257), `execve`
-  (59), `sendfile` (40) and `splice` (275)
-- `crash` reports `D6` with `fault=0x0 [null]`, `fault_region: null`,
-  `fault_access: not-mapped` and a `stack_hits` list
-- the stdio session exercises `heap.baseline`, `heap.diff` and `heap.recipe`
-  and returns a diff plus a reclaim plan
-- `realloc_churn` produces no false positives while exercising moving and
-  in-place reallocs
-- `arena_backfill` recovers allocations from non-main thread arenas during
-  attach
-- `metadata` corrupts a chunk size and triggers `D8` at free() entry
-- `size_swap` replaces a size with a valid-looking value and triggers `D9`
-- `oom` triggers a bounded cgroup OOM from a sibling process while the agent
-  traces `/bin/sleep`; the OOM tracepoint or kprobe emits a D4 kernel-OOM
-  finding (container memory limit: `GFS_MEMORY_LIMIT`, default `2g`). OOM
-  events are not restricted to the target cgroup because the kill can run in a
-  kernel-reaper context, so `--oom` reports host-wide OOM kill events.
-- prediction unit tests cover separate main/thread arena bins
-- `uaf_direct` writes to a freed chunk without a syscall and triggers D2
-  through `--watch-freed`
-- `dlopen_alloc` loads a plugin, refreshes maps/probes, and allocates again
-  after `maps.refresh`
-- `cxx_alloc` allocates through libstdc++ and emits `new`/`delete` labelled
-  events
-- `heap.introspect` is covered by unprivileged live ptrace tests:
-  `build/testdata/tcache_introspect` fills the tcache (16 slots on 2.44, 7 on
-  older glibc) and spills the rest, while `build/testdata/tcache_threads`
-  verifies per-thread snapshots and thread arenas. Synthetic tests cover the
-  legacy `counts[64]` and modern `num_slots[76]` layouts plus safe-linking
-  decode.
-- `deploy/run-integration.sh` re-checks these report fields on the host and
-  fails the run if they are missing
+- `GFS_SKIP_BUILD=1` reuses the existing agent binary and case images.
+- `GFS_BPF_LOG=1` includes the eBPF verifier log (default in the harness).
+- `GFS_MEMORY_LIMIT` sets the container memory limit (default `2g`).
+- `GFS_E2E_KEEP=1` keeps the test container after the test for inspection.
+- `GFS_E2E_MATRIX=1` enables the glibc base-image matrix.
+- `GFS_E2E_PULL=1` allows podman to pull missing base images.
+- `GFS_IMAGE_PREFIX` overrides the image prefix.
+- `GFS_IMAGE_TAG` overrides the per-case image tag.
+- `GFS_REPO_ROOT` overrides repository-root discovery for the harness.
 
 ## Reading results
 
 The latest host log is always:
 
 ```sh
-build/logs/latest.log
+build/logs/latest-e2e.log
 ```
 
-A successful run ends with:
+Per-test artifacts live under:
 
 ```text
-=== allocator profile assertions ===
-ok: heap.json has detected profile
-...
-=== crash/syscall assertions ===
-ok: D6 crash finding present
-ok: openat buffer checked
-...
-=== finished: ... status=0 ===
+build/e2e/<timestamp>-<pid>/<case>/
+  run.json
+  logs/
+    host.log
+    commands.log
+    <step>.stdout
+    <step>.stderr
+    container.json
+  reports/
+    <scenario>.events.jsonl
+    <scenario>.stderr
+    <scenario>/
+      heap.json
+      report.md
+      summary.json
+      rop.json
 ```
 
-Relevant report paths:
+The container closes with status 0 only when both the victim subtests and the
+host report assertions pass. `go test -v` streams the victim output; the full
+victim stdout and stderr are also written to the case log directory.
 
-```text
-build/reports/poison/heap.json
-build/reports/profile-override/heap.json
-build/reports/stdio.jsonl
-build/reports/integration.log
-```
+A successful run ends with `ok gofengshui/e2e/glibc`, `ok
+gofengshui/e2e/musl`, and the internal harness packages.
 
-If the container fails, start with `build/logs/latest.log`; the full eBPF
-verifier output is included when `GFS_BPF_LOG=1`.
+## Adding a container case
+
+1. Create `e2e-tests/<name>/`.
+2. Add a `Containerfile` that builds the case fixtures with the correct
+   toolchain and copies the host-built `build/gofengshui`.
+3. Add `doc.go` as a package anchor.
+4. Add `<name>_test.go` with `//go:build !victim` for podman orchestration.
+5. Add `victim_test.go` with `//go:build victim` for in-container scenarios.
+6. Reuse `internal/harness`, `internal/checks`, and `internal/agentrun`.
+
+Keep victim subtests sequential. eBPF, ptrace, and `/tmp` handshake files are
+process-global, and the OOM test imposes a container memory limit.
 
 ## Failure triage
 
-- `permission denied` or verifier load failure: confirm the container is
-  privileged and `/sys/kernel/btf` is mounted.
-- Missing profile assertions: inspect `heap.json` and the
-  `allocator=...` line in the run stderr file.
-- Root-owned reports after an interactive container session:
-  `deploy/fix-permissions.sh`.
+- `e2e tests must run as root`: run `sudo -E make e2e`.
+- Image build failure: inspect `logs/podman-build.stderr` and
+  `logs/podman-build.stdout`; confirm BTF is available.
+- Missing reports: inspect the victim subtest output and the corresponding
+  `reports/` directory.
+- Root-owned artifacts: the `make e2e` target restores ownership after the run.
+  For interactive containers, run `deploy/fix-permissions.sh`.
+- Stale containers: `sudo -E make e2e-clean`.
 - Stale image after changing Go or C sources: rerun without
   `GFS_SKIP_BUILD=1`.
+- Matrix or musl case skipped: the base image is not local. Set
+  `GFS_E2E_PULL=1` or pre-pull the image; use `GFS_E2E_MATRIX=1` for the
+  matrix.

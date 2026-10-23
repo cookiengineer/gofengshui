@@ -30,6 +30,7 @@ TESTBINS := $(BUILD_DIR)/testdata/alloc_loop \
             $(BUILD_DIR)/testdata/alloc_fail \
             $(BUILD_DIR)/testdata/crash \
             $(BUILD_DIR)/testdata/threads \
+            $(BUILD_DIR)/testdata/attach_threads \
             $(BUILD_DIR)/testdata/fork_exec \
             $(BUILD_DIR)/testdata/backfill \
             $(BUILD_DIR)/testdata/poison \
@@ -48,8 +49,10 @@ TESTBINS := $(BUILD_DIR)/testdata/alloc_loop \
             $(BUILD_DIR)/testdata/oom
 
 TESTLIBS := $(BUILD_DIR)/testdata/libgfsplugin.so
+E2E_DIR := e2e-tests
+E2E_LOG := $(BUILD_DIR)/logs/e2e-$$(date +%Y%m%d-%H%M%S).log
 
-.PHONY: all build generate bpf test test-c bench dist clean fmt vet
+.PHONY: all build generate bpf test test-c bench dist clean fmt vet e2e e2e-image e2e-clean
 
 all: build
 
@@ -72,6 +75,25 @@ $(BPF_GEN): $(BPF_OBJ) source/tools/bpfgen/main.go
 test: generate
 	$(GO) -C source test ./...
 
+e2e: SHELL := /bin/bash
+e2e:
+	@test "$$(id -u)" = "0" || { echo "e2e tests must run as root; use: sudo -E make e2e"; exit 1; }
+	@mkdir -p $(BUILD_DIR)/logs
+	@log="$$(pwd)/$(E2E_LOG)"; ln -sfn "$$log" $(BUILD_DIR)/logs/latest-e2e.log; \
+	  $(GO) -C $(E2E_DIR) test -p 1 -timeout=60m -v ./... 2>&1 | tee -a "$$log"; status=$${PIPESTATUS[0]}; \
+	  chown -R "$${SUDO_UID:-0}:$${SUDO_GID:-0}" $(BUILD_DIR)/e2e $(BUILD_DIR)/logs $(BUILD_DIR)/gofengshui $(BUILD_DIR)/bpf source/ebpf/object_generated.go 2>/dev/null || true; \
+	  exit $$status
+
+e2e-image:
+	@test "$$(id -u)" = "0" || { echo "run: sudo -E make e2e-image"; exit 1; }
+	$(MAKE) build
+	podman build -t localhost/gofengshui-e2e/glibc:dev -f $(E2E_DIR)/glibc/Containerfile .
+
+e2e-clean:
+	@test "$$(id -u)" = "0" || { echo "run: sudo -E make e2e-clean"; exit 1; }
+	-podman ps -aq --filter label=gofengshui.e2e=1 | xargs -r podman rm -f
+	rm -rf $(BUILD_DIR)/e2e
+
 bench: generate
 	$(GO) -C source test -run '^$$' -bench . -benchmem ./heap
 
@@ -80,7 +102,7 @@ dist: build
 	mkdir -p $(DIST_DIR)/docs $(DIST_DIR)/deploy
 	cp -p $(BIN) $(DIST_DIR)/
 	cp -p docs/*.md $(DIST_DIR)/docs/
-	cp -p deploy/*.sh deploy/Containerfile $(DIST_DIR)/deploy/
+	cp -p deploy/*.sh $(DIST_DIR)/deploy/
 	tar -C $(BUILD_DIR)/dist -czf $(BUILD_DIR)/dist/$(DIST_NAME).tar.gz $(DIST_NAME)
 	cd $(BUILD_DIR)/dist && sha256sum $(DIST_NAME).tar.gz > $(DIST_NAME).tar.gz.sha256
 	@echo "release: $(BUILD_DIR)/dist/$(DIST_NAME).tar.gz"

@@ -66,9 +66,10 @@ This is read-only and can run as the normal user.
 deploy/build-image.sh
 ```
 
-This runs `make build`, `make test-c`, and `sudo podman build`. The image is
-built in rootful podman storage because the privileged runner uses rootful
-podman; rootless and rootful podman have separate image stores.
+This runs `make build` and builds `localhost/gofengshui-e2e/glibc:dev` from
+`e2e-tests/glibc/Containerfile`. The image is built in rootful podman storage
+because the privileged runner uses rootful podman; rootless and rootful podman
+have separate image stores. The e2e harness normally builds case images itself.
 
 ## Run the privileged development container
 
@@ -85,33 +86,27 @@ sudo podman run --rm -it \
   --security-opt apparmor=unconfined \
   -v /sys/kernel/btf:/sys/kernel/btf:ro \
   -v "$PWD/build/reports:/reports:Z" \
-  localhost/gofengshui:dev
+  localhost/gofengshui-e2e/glibc:dev
 ```
 
-Or run the integration suite non-interactively:
+Or run the e2e suite non-interactively as root:
 
 ```sh
-deploy/run-integration.sh
+sudo -E make e2e
 ```
 
-The host script rebuilds the binary, test PoCs, and rootful container image
-before running, unless `GFS_SKIP_BUILD=1` is set. The integration container is
-memory-limited (`GFS_MEMORY_LIMIT`, default `2g`) so the OOM tracepoint test has
-a bounded cgroup to trigger against. It writes a timestamped log
-to `build/logs/integration-*.log` and updates `build/logs/latest.log`. The
-container writes its own copy to `build/reports/integration.log`. Both include
-the eBPF verifier log when a program fails to load (`GFS_BPF_LOG=1`).
+The Go e2e harness builds the agent and case images, starts one privileged
+container per case, compiles the `//go:build victim` tests with `go test -c`,
+copies them into the container, and executes them with `podman exec`. It also
+runs host-side report assertions after the victim tests. Builds are reused when
+`GFS_SKIP_BUILD=1` is set. The container is memory-limited
+(`GFS_MEMORY_LIMIT`, default `2g`) so the OOM tracepoint test has a bounded
+cgroup to trigger against.
 
-The script also validates the allocator-profile reports on the host and fails
-the run if the detected profile or the `--glibc-version 2.31` override is
-missing. See `docs/DEVELOPMENT.md` for the unprivileged/privileged handoff,
-log locations, and failure triage.
-
-Inside the container, the same suite is:
-
-```sh
-/usr/local/bin/gfs-tests
-```
+Logs are written to `build/logs/e2e-*.log` with the
+`build/logs/latest-e2e.log` symlink. Per-test logs and reports are written under
+`build/e2e/<timestamp>-<pid>/<case>/`. See `docs/DEVELOPMENT.md` for the
+unprivileged/privileged handoff, log locations, and failure triage.
 
 Expected results:
 
@@ -135,6 +130,9 @@ Expected results:
 - `heap.introspect` reports the live tcache layout, per-thread bins and main
   arena from a stopped target (unprivileged coverage; add to the privileged
   suite when a report assertion is available)
+- the Alpine/musl case emits `D1`, `D2`, `D4`, and `D6`, captures allocations
+  from multiple threads and fork/exec children, and serves the unix-socket
+  protocol; glibc-only tcache/metadata checks are not asserted there
 
 ## Host-privileged agent
 
@@ -221,9 +219,10 @@ gofengshui validate \
 
 ## Report ownership
 
-The privileged container runs as root, so `build/reports/` is created with
-root ownership. `deploy/run-integration.sh` removes old reports and restores
-ownership automatically. For reports created by an interactive
+The privileged container runs as root, so e2e artifacts are created with root
+ownership. `make e2e` restores ownership of `build/e2e`, `build/logs`,
+`build/gofengshui`, `build/bpf`, and `source/ebpf/object_generated.go` to the
+invoking `SUDO_UID`/`SUDO_GID` automatically. For reports created by an interactive
 `deploy/dev-container.sh` session, run:
 
 ```sh

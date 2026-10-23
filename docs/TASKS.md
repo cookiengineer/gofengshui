@@ -93,9 +93,78 @@ Status legend: `yes`, `partial`, `no`. Updated incrementally during work.
 | M3.27 | `heap.introspect` tcache/arena introspection on stripped libc | yes | yes | no |
 | M3.28 | Observed-bin prediction (`heap.predict observe`) | yes | yes | no |
 
-## Privileged Integration Result (2026-10-22)
+## E2E Test Migration
 
-`deploy/run-integration.sh` completed with status 0:
+| # | Task | Implemented? | Tested? | Verified? |
+|---|---|---|---|---|
+| E2E.1 | Separate `e2e-tests` Go module and root-only harness | yes | yes | yes |
+| E2E.2 | Per-case `Containerfile` layout (`glibc`, `musl`) | yes | partial | no |
+| E2E.3 | Host-side podman lifecycle, image build, victim `go test -c` flow | yes | yes | yes |
+| E2E.4 | Glibc detector/profile/concurrency/protocol/ROP/OOM victim tests | yes | yes | yes |
+| E2E.5 | Host-side typed report assertions replacing bash greps | yes | yes | yes |
+| E2E.6 | Glibc base-image matrix | yes | partial | no |
+| E2E.7 | Alpine/musl baseline case | yes | partial | no |
+| E2E.8 | Remove `deploy/run-integration.sh` and `deploy/in-container-tests.sh` | yes | yes | yes |
+| E2E.9 | `make e2e` root workflow, logs and ownership restore | yes | yes | yes |
+
+`Tested` for E2E.1-E2E.5 and E2E.8 means the Go module compiles, harness unit
+tests pass, victim test binaries compile with `-tags victim`, and the root guard
+works locally. `Verified` requires a privileged `sudo -E make e2e` run on the
+developer host. Container image builds could not be exercised in the current
+workspace because package registry access was unavailable.
+
+First privileged run (2026-10-23) exercised the glibc case end-to-end and
+exposed several harness/detector issues that are now fixed:
+
+- syscall-buffer D2 findings were deduplicated across different syscalls at the
+  same buffer address; the dedup key now includes `Arg1`/`Arg2`/`Caller`.
+- the Go victim test process's own syscalls were traced because `victim.test`
+  shared the container cgroup; the binary is now copied as `gofengshui` so the
+  agent's self-event filter excludes it.
+- the unix-socket agent process now starts from the runner binary path instead
+  of relying on `agent` being in `PATH`.
+- the crash test reads the D6 message from the event stream rather than stderr.
+- the attach test uses a dedicated long-lived multi-thread fixture that keeps
+  allocating after the session attaches, and filters test-process noise.
+- the OOM container sets `memory.oom.group=0` so a bounded OOM kill does not
+  take down the Go test process.
+- the glibc matrix is opt-in (`GFS_E2E_MATRIX=1`) and missing base images skip
+  or fail fast instead of triggering long registry retries.
+
+Second privileged run (2026-10-23): the glibc victim suite and host report
+assertions passed except the attach case. It captured zero allocations because
+the replacement fixture allocated only once before attach and then slept. A new
+`attach_threads` fixture continuously allocates from four threads for ten
+seconds; the attach case now uses it.
+
+Third privileged run (2026-10-23): the full glibc case passed, including attach,
+all detector/profile/concurrency/protocol/ROP/OOM subtests, and the host report
+assertions. The glibc matrix was skipped because `GFS_E2E_MATRIX` was not set;
+musl was skipped because `alpine:3.20` was not present in the rootful image
+store.
+
+### E2E coverage gaps
+
+- The glibc e2e case does not yet exercise `heap.introspect`, `heap.predict`,
+  `heap.snapshot`, `heap.analyze`, event replay/cursor, `mem.read`/`mem.write`,
+  `regs.get`/`stack.get`, explicit breakpoint/watchpoint protocol calls, the
+  `gofengshui ctl` CLI, or `--no-ebpf`.
+- The matrix now runs the full glibc victim suite and host report assertions
+  per base image, but it is opt-in and has not yet been verified end-to-end.
+- The musl case covers allocator tracing, D1/D2/D4/D6, threads, fork/exec, and
+  the unix-socket protocol. It does not yet cover D3, ROP, OOM, attach/backfill,
+  stdio, dlopen, C++, heap analysis, or allocator introspection.
+- The musl Containerfile builds extra fixtures (`overflow`, `backfill`,
+  `arena_backfill`, `rop_sink`, `watch_alloc`, `syscall_uaf`) that the musl
+  victim tests do not use yet.
+- The matrix needs network access for base images and package installation;
+  the musl build needs network for Alpine and `build-base` unless layers are
+  cached.
+
+
+## Privileged Integration Result (2026-10-22, historical bash runner)
+
+The previous `deploy/run-integration.sh` runner completed with status 0:
 
 - D1 double-free finding observed
 - D2 UAF finding observed
@@ -104,7 +173,7 @@ Status legend: `yes`, `partial`, `no`. Updated incrementally during work.
 - `rop.json` reports `verified: true`
 - reports and event streams written under `build/reports/`
 
-## Latest Privileged Run (2026-10-22)
+## Latest Privileged Run (2026-10-22, historical bash runner)
 
 All checks passed with status 0:
 
@@ -161,9 +230,9 @@ The default predictor is a userspace model based on observed free/alloc events;
 `heap.predict` with `observe: true` (or a recent `heap.introspect` snapshot)
 uses live tcache state instead.
 
-## Final Regression (2026-10-22)
+## Final Regression (2026-10-22, historical bash runner)
 
-`deploy/run-integration.sh` completed with status 0 after the final changes:
+The previous `deploy/run-integration.sh` runner completed with status 0 after the final changes:
 
 - allocator profile detection and 2.31 override
 - D7 tcache links (including self-loop/live/cross-size unit coverage)

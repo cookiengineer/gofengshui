@@ -1,0 +1,21 @@
+ARG ALPINE_VERSION=3.20
+
+FROM alpine:${ALPINE_VERSION} AS builder
+
+RUN apk add --no-cache build-base
+
+COPY source/testdata/c/ /src/
+RUN mkdir -p /out \
+    && for name in alloc_loop double_free uaf overflow alloc_fail crash threads attach_threads fork_exec backfill arena_backfill rop_sink watch_alloc syscall_uaf; do \
+         gcc -g -O0 -fno-omit-frame-pointer -fno-stack-protector -no-pie -pthread -o "/out/$name" "/src/$name.c"; \
+       done
+
+FROM alpine:${ALPINE_VERSION}
+
+RUN mkdir -p /opt/gfs/testdata /reports /opt/gfs/e2e
+COPY build/gofengshui /usr/local/bin/gofengshui
+COPY --from=builder /out/ /opt/gfs/testdata/
+RUN chmod +x /usr/local/bin/gofengshui
+
+WORKDIR /opt/gfs
+CMD ["/bin/sh", "-c", "while true; do sleep 3600; done"]

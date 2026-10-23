@@ -1,0 +1,36 @@
+ARG BASE_IMAGE=ubuntu:24.04
+
+FROM ${BASE_IMAGE} AS builder
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY source/testdata/c/ /src/
+RUN mkdir -p /out \
+    && for f in /src/*.c; do \
+         name="$(basename "$f" .c)"; \
+         if [ "$name" = "gfsplugin" ]; then \
+           gcc -g -O0 -shared -fPIC -o "/out/libgfsplugin.so" "$f"; \
+         else \
+           gcc -g -O0 -fno-omit-frame-pointer -fno-stack-protector -no-pie -pthread -o "/out/$name" "$f"; \
+         fi; \
+       done \
+    && for f in /src/*.cpp; do \
+         name="$(basename "$f" .cpp)"; \
+         g++ -g -O0 -fno-omit-frame-pointer -fno-stack-protector -no-pie -o "/out/$name" "$f"; \
+       done
+
+FROM ${BASE_IMAGE}
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libstdc++6 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /opt/gfs/testdata /reports /opt/gfs/e2e
+COPY build/gofengshui /usr/local/bin/gofengshui
+COPY --from=builder /out/ /opt/gfs/testdata/
+RUN chmod +x /usr/local/bin/gofengshui
+
+WORKDIR /opt/gfs
+CMD ["/bin/sh", "-c", "while true; do sleep 3600; done"]

@@ -41,6 +41,12 @@ source/                  all Go and test-harness source code
   tools/bpfgen/          BPF object -> Go byte-slice generator
   transport/             stdio and unix-socket transports
 deploy/                  privileged development scripts
+e2e-tests/               containerized end-to-end cases and Go harness
+  glibc/                 glibc Containerfile, host and victim tests
+  musl/                  Alpine/musl Containerfile, host and victim tests
+  internal/harness/      root guard, podman lifecycle, build and logging
+  internal/checks/       JSON/JSONL/report assertions
+  internal/agentrun/     agent, fixture and protocol helpers
 ```
 
 No `internal/` directory is used; every package is importable as a library.
@@ -306,6 +312,11 @@ See `docs/TASKS.md` for the per-task implemented/tested/verified matrix.
 
 Implemented and locally tested:
 
+- containerized e2e suite in a separate `e2e-tests` Go module, with
+  per-case Containerfiles, host-side podman orchestration, and victim tests
+  compiled with `go test -c -tags victim`
+- glibc e2e case plus a glibc base-image matrix and an Alpine/musl case
+- `make e2e` root workflow with per-test logs and host-side report assertions
 - repository/build pipeline and embedded BPF object generation
 - glibc allocator uprobes and raw syscall tracing source
 - heap model, tombstones, D1/D2/D3 findings
