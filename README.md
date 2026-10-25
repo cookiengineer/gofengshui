@@ -60,6 +60,12 @@ The e2e harness also has unprivileged unit tests:
 go -C e2e-tests test ./internal/...
 ```
 
+Read-only host and eBPF diagnostics:
+
+```sh
+make check-env
+```
+
 ### Privileged e2e tests
 
 The container suite loads real eBPF and uses rootful podman, so it must run as

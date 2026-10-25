@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"gofengshui/e2e/internal/hostinfo"
 )
 
 func RequireRoot(t *testing.T) {
@@ -29,16 +31,11 @@ func (c *Case) Preflight() {
 	if strings.Contains(string(info.Stdout), "rootless=true") {
 		c.t.Fatalf("rootful podman is required: %s", strings.TrimSpace(string(info.Stdout)))
 	}
-	for _, path := range []string{
-		"/proc/sys/kernel/unprivileged_bpf_disabled",
-		"/proc/sys/kernel/perf_event_paranoid",
-		"/proc/sys/kernel/yama/ptrace_scope",
-	} {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			c.Logf("sysctl %s: %v", path, err)
+	for _, item := range hostinfo.ReadSysctls("/") {
+		if !item.Present {
+			c.Logf("sysctl %s: missing", item.Path)
 			continue
 		}
-		c.Logf("sysctl %s=%s", path, strings.TrimSpace(string(data)))
+		c.Logf("sysctl %s=%s", item.Path, item.Value)
 	}
 }

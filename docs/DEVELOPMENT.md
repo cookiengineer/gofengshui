@@ -36,6 +36,16 @@ The e2e module also has unprivileged unit tests for the harness itself:
 go -C e2e-tests test ./internal/...
 ```
 
+Host and eBPF diagnostics are read-only:
+
+```sh
+make check-env
+go -C e2e-tests run ./cmd/hostinfo -json
+```
+
+The developer toolchain lives in `toolchain/`. `make test` runs its unit tests,
+and `make toolchain` builds the commands into `build/toolchain/`.
+
 Stack capture can be sampled on busy targets:
 
 ```sh
@@ -185,7 +195,7 @@ process-global, and the OOM test imposes a container memory limit.
 - Missing reports: inspect the victim subtest output and the corresponding
   `reports/` directory.
 - Root-owned artifacts: the `make e2e` target restores ownership after the run.
-  For interactive containers, run `deploy/fix-permissions.sh`.
+  For interactive containers, run `make fix-permissions`.
 - Stale containers: `sudo -E make e2e-clean`.
 - Stale image after changing Go or C sources: rerun without
   `GFS_SKIP_BUILD=1`.

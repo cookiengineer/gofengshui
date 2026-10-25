@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"gofengshui/e2e/internal/hostinfo"
 )
 
 type Run struct {
@@ -109,8 +111,8 @@ func (r *Run) writeRunMetadata() {
 	if out, err := exec.Command("git", "-C", r.Root, "rev-parse", "HEAD").Output(); err == nil {
 		meta["commit"] = strings.TrimSpace(string(out))
 	}
-	if out, err := exec.Command("uname", "-a").Output(); err == nil {
-		meta["uname"] = strings.TrimSpace(string(out))
+	if uname := hostinfo.Uname(); uname != "" {
+		meta["uname"] = uname
 	}
 	if out, err := exec.Command("go", "version").Output(); err == nil {
 		meta["go"] = strings.TrimSpace(string(out))
@@ -118,13 +120,9 @@ func (r *Run) writeRunMetadata() {
 	if out, err := exec.Command("podman", "version", "--format", "{{.Client.Version}}").Output(); err == nil {
 		meta["podman"] = strings.TrimSpace(string(out))
 	}
-	for _, path := range []string{
-		"/proc/sys/kernel/unprivileged_bpf_disabled",
-		"/proc/sys/kernel/perf_event_paranoid",
-		"/proc/sys/kernel/yama/ptrace_scope",
-	} {
-		if data, err := os.ReadFile(path); err == nil {
-			meta[filepath.Base(path)] = strings.TrimSpace(string(data))
+	for _, item := range hostinfo.ReadSysctls("/") {
+		if item.Present {
+			meta[filepath.Base(item.Path)] = item.Value
 		}
 	}
 	data, _ := json.MarshalIndent(meta, "", "  ")

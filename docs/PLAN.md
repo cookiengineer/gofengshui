@@ -40,7 +40,7 @@ source/                  all Go and test-harness source code
   testdata/              C harnesses and PoCs
   tools/bpfgen/          BPF object -> Go byte-slice generator
   transport/             stdio and unix-socket transports
-deploy/                  privileged development scripts
+toolchain/               Go development commands for privileged container workflows
 e2e-tests/               containerized end-to-end cases and Go harness
   glibc/                 glibc Containerfile, host and victim tests
   musl/                  Alpine/musl Containerfile, host and victim tests
@@ -240,14 +240,14 @@ in `source/`.
 - Default container seccomp profiles block `bpf(2)`; use `seccomp=unconfined`.
 - `/sys/kernel/btf/vmlinux` must be visible if kernel BTF is used.
 - Rootless podman cannot run eBPF when `unprivileged_bpf_disabled=2`.
-- Privileged scripts live in `deploy/` and are executed manually by the host
-  operator during development.
+- Privileged Go commands live in `toolchain/` and are executed manually by the
+  host operator during development.
 
 ## Milestones
 
 ### M0 — Scaffold and privileged harness
 
-- Directory layout, Makefile, BPF build, loader, test harness, deploy scripts.
+- Directory layout, Makefile, BPF build, loader, test harness, toolchain commands.
 - Acceptance: static agent runs in privileged container; malloc/free JSONL
   events; double free detected.
 

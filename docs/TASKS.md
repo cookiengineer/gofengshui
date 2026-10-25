@@ -6,13 +6,13 @@ Status legend: `yes`, `partial`, `no`. Updated incrementally during work.
 
 | # | Task | Implemented? | Tested? | Verified? |
 |---|---|---|---|---|
-| M0.1 | Repository layout (`source/`, `bpf/`, `build/`, `docs/`, `deploy/`) | yes | yes | yes |
+| M0.1 | Repository layout (`source/`, `bpf/`, `build/`, `docs/`, `toolchain/`, `e2e-tests/`) | yes | yes | yes |
 | M0.2 | `Makefile` targets (`generate`, `build`, `test`, `test-c`, `clean`, `fmt`, `vet`) | yes | yes | yes |
 | M0.3 | BPF C module and shared event/map headers | yes | yes | yes |
 | M0.4 | BPF object -> embedded Go byte-slice generator | yes | yes | yes |
 | M0.5 | eBPF loader and ringbuf decoder | yes | yes | yes |
 | M0.6 | C test harness with `gfs_sink` and PoCs | yes | yes | yes |
-| M0.7 | Deploy scripts for privileged container | yes | yes | yes |
+| M0.7 | Go toolchain commands for privileged container workflows | yes | yes | yes |
 | M0.8 | Static `CGO_ENABLED=0` binary build | yes | yes | yes |
 | M0.9 | malloc/free JSONL event stream | yes | yes | yes |
 | M0.10 | Double-free detection | yes | yes | yes |
@@ -106,12 +106,15 @@ Status legend: `yes`, `partial`, `no`. Updated incrementally during work.
 | E2E.7 | Alpine/musl baseline case | yes | partial | no |
 | E2E.8 | Remove `deploy/run-integration.sh` and `deploy/in-container-tests.sh` | yes | yes | yes |
 | E2E.9 | `make e2e` root workflow, logs and ownership restore | yes | yes | yes |
+| E2E.10 | Replace `deploy/` shell helpers with `toolchain/` Go commands and fold host diagnostics into the harness | yes | yes | no |
 
-`Tested` for E2E.1-E2E.5 and E2E.8 means the Go module compiles, harness unit
-tests pass, victim test binaries compile with `-tags victim`, and the root guard
-works locally. `Verified` requires a privileged `sudo -E make e2e` run on the
-developer host. Container image builds could not be exercised in the current
-workspace because package registry access was unavailable.
+`Tested` for E2E.1-E2E.5, E2E.8 and E2E.10 means the Go modules compile,
+harness and toolchain unit tests pass, victim test binaries compile with
+`-tags victim`, the root guard works locally, and dry-run command construction
+is checked. E2E.10 still needs a privileged interactive container verification.
+`Verified` requires a privileged `sudo -E make e2e` run on the developer host.
+Container image builds could not be exercised in the current workspace because
+package registry access was unavailable.
 
 First privileged run (2026-10-23) exercised the glibc case end-to-end and
 exposed several harness/detector issues that are now fixed:

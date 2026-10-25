@@ -1,0 +1,3 @@
+module gofengshui/toolchain
+
+go 1.27.1

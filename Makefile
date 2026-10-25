@@ -51,8 +51,11 @@ TESTBINS := $(BUILD_DIR)/testdata/alloc_loop \
 TESTLIBS := $(BUILD_DIR)/testdata/libgfsplugin.so
 E2E_DIR := e2e-tests
 E2E_LOG := $(BUILD_DIR)/logs/e2e-$$(date +%Y%m%d-%H%M%S).log
+TOOLCHAIN_DIR := toolchain
+TOOLCHAIN_BIN := $(BUILD_DIR)/toolchain
 
-.PHONY: all build generate bpf test test-c bench dist clean fmt vet e2e e2e-image e2e-clean
+.PHONY: all build generate bpf test test-c bench dist clean fmt vet e2e e2e-image e2e-clean \
+        toolchain toolchain-test toolchain-vet check-env dev-image dev-container host-agent fix-permissions
 
 all: build
 
@@ -72,8 +75,33 @@ $(BPF_GEN): $(BPF_OBJ) source/tools/bpfgen/main.go
 	$(GO) -C source run ./tools/bpfgen -in ../$(BPF_OBJ) -out ebpf/object_generated.go -pkg ebpf -var bpfObject
 	gofmt -w $@
 
-test: generate
+test: generate toolchain-test
 	$(GO) -C source test ./...
+
+toolchain:
+	@mkdir -p $(TOOLCHAIN_BIN)
+	$(GO) -C $(TOOLCHAIN_DIR) build -trimpath -o ../$(TOOLCHAIN_BIN)/ ./...
+
+toolchain-test:
+	$(GO) -C $(TOOLCHAIN_DIR) test ./...
+
+toolchain-vet:
+	$(GO) -C $(TOOLCHAIN_DIR) vet ./...
+
+check-env:
+	$(GO) -C $(E2E_DIR) run ./cmd/hostinfo
+
+dev-image: toolchain
+	./$(TOOLCHAIN_BIN)/build-image
+
+dev-container: toolchain
+	./$(TOOLCHAIN_BIN)/dev-container
+
+host-agent: toolchain
+	./$(TOOLCHAIN_BIN)/host-agent
+
+fix-permissions: toolchain
+	./$(TOOLCHAIN_BIN)/fix-permissions
 
 e2e: SHELL := /bin/bash
 e2e:
@@ -84,10 +112,7 @@ e2e:
 	  chown -R "$${SUDO_UID:-0}:$${SUDO_GID:-0}" $(BUILD_DIR)/e2e $(BUILD_DIR)/logs $(BUILD_DIR)/gofengshui $(BUILD_DIR)/bpf source/ebpf/object_generated.go 2>/dev/null || true; \
 	  exit $$status
 
-e2e-image:
-	@test "$$(id -u)" = "0" || { echo "run: sudo -E make e2e-image"; exit 1; }
-	$(MAKE) build
-	podman build -t localhost/gofengshui-e2e/glibc:dev -f $(E2E_DIR)/glibc/Containerfile .
+e2e-image: dev-image
 
 e2e-clean:
 	@test "$$(id -u)" = "0" || { echo "run: sudo -E make e2e-clean"; exit 1; }
@@ -99,10 +124,10 @@ bench: generate
 
 dist: build
 	rm -rf $(DIST_DIR)
-	mkdir -p $(DIST_DIR)/docs $(DIST_DIR)/deploy
+	mkdir -p $(DIST_DIR)/docs $(DIST_DIR)/toolchain
 	cp -p $(BIN) $(DIST_DIR)/
 	cp -p docs/*.md $(DIST_DIR)/docs/
-	cp -p deploy/*.sh $(DIST_DIR)/deploy/
+	cp -a $(TOOLCHAIN_DIR)/. $(DIST_DIR)/toolchain/
 	tar -C $(BUILD_DIR)/dist -czf $(BUILD_DIR)/dist/$(DIST_NAME).tar.gz $(DIST_NAME)
 	cd $(BUILD_DIR)/dist && sha256sum $(DIST_NAME).tar.gz > $(DIST_NAME).tar.gz.sha256
 	@echo "release: $(BUILD_DIR)/dist/$(DIST_NAME).tar.gz"
@@ -125,7 +150,7 @@ clean:
 	rm -rf $(BUILD_DIR) $(BPF_GEN)
 
 fmt:
-	gofmt -w $$(find source -name '*.go' ! -name 'object_generated.go')
+	gofmt -w $$(find source e2e-tests toolchain -name '*.go' ! -name 'object_generated.go')
 
-vet: generate
+vet: generate toolchain-vet
 	$(GO) -C source vet ./...

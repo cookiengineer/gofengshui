@@ -26,6 +26,13 @@ Run only the unprivileged harness/unit checks:
 go -C e2e-tests test ./internal/...
 ```
 
+Print read-only host and eBPF diagnostics, optionally as JSON:
+
+```sh
+go -C e2e-tests run ./cmd/hostinfo
+go -C e2e-tests run ./cmd/hostinfo -json
+```
+
 Compile a victim test binary manually:
 
 ```sh

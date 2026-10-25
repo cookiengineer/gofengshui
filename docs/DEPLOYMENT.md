@@ -16,7 +16,7 @@ On this development host:
 - rootless podman
 
 Therefore rootless podman cannot load the eBPF object. Use the rootful
-scripts below.
+toolchain commands below.
 
 ## Build
 
@@ -44,8 +44,10 @@ build/dist/gofengshui-<version>-linux-x86_64.tar.gz
 build/dist/gofengshui-<version>-linux-x86_64.tar.gz.sha256
 ```
 
-The archive contains the binary, `docs/`, and `deploy/`. Override the version
-with `make dist VERSION=0.2.0`. Inspect the embedded metadata with:
+The archive contains the binary, `docs/`, and the `toolchain/` Go source.
+The toolchain source is included for reference; run it from a repository
+checkout with a Go toolchain installed. Override the version with
+`make dist VERSION=0.2.0`. Inspect the embedded metadata with:
 
 ```sh
 gofengshui version
@@ -55,26 +57,34 @@ gofengshui version --json
 ## Check the host
 
 ```sh
-deploy/check-env.sh
+make check-env
 ```
 
-This is read-only and can run as the normal user.
+This is read-only and can run as the normal user. It prints the same host and
+eBPF diagnostics recorded by the e2e harness. Add JSON output with:
+
+```sh
+go -C e2e-tests run ./cmd/hostinfo -json
+```
 
 ## Build the test image
 
 ```sh
-deploy/build-image.sh
+make dev-image
 ```
 
 This runs `make build` and builds `localhost/gofengshui-e2e/glibc:dev` from
-`e2e-tests/glibc/Containerfile`. The image is built in rootful podman storage
-because the privileged runner uses rootful podman; rootless and rootful podman
-have separate image stores. The e2e harness normally builds case images itself.
+`e2e-tests/glibc/Containerfile`, logging to `build/logs/latest-build.log`.
+The Go tool itself can be invoked directly with
+`go -C toolchain run ./build-image`. The image is built in rootful podman
+storage because the privileged runner uses rootful podman; rootless and rootful
+podman have separate image stores. `make e2e-image` is an alias for
+`make dev-image`. The e2e harness normally builds per-case images itself.
 
 ## Run the privileged development container
 
 ```sh
-deploy/dev-container.sh
+make dev-container
 ```
 
 This executes:
@@ -88,6 +98,14 @@ sudo podman run --rm -it \
   -v "$PWD/build/reports:/reports:Z" \
   localhost/gofengshui-e2e/glibc:dev
 ```
+
+For an interactive shell, pass a container command after `--`:
+
+```sh
+go -C toolchain run ./dev-container -- /bin/bash
+```
+
+Use `--dry-run` to print the podman command without executing it.
 
 Or run the e2e suite non-interactively as root:
 
@@ -137,11 +155,12 @@ Expected results:
 ## Host-privileged agent
 
 ```sh
-deploy/host-agent.sh
+make host-agent
 ```
 
 Runs `gofengshui agent` in a privileged container with `--pid=host`, sharing
-`build/run` as `/run/gofengshui`. From the host:
+`build/run` as `/run/gofengshui`. The underlying Go command is
+`go -C toolchain run ./host-agent`. From the host:
 
 ```sh
 ./build/gofengshui ctl \
@@ -222,12 +241,15 @@ gofengshui validate \
 The privileged container runs as root, so e2e artifacts are created with root
 ownership. `make e2e` restores ownership of `build/e2e`, `build/logs`,
 `build/gofengshui`, `build/bpf`, and `source/ebpf/object_generated.go` to the
-invoking `SUDO_UID`/`SUDO_GID` automatically. For reports created by an interactive
-`deploy/dev-container.sh` session, run:
+invoking `SUDO_UID`/`SUDO_GID` automatically. For reports created by an
+interactive `make dev-container` session, run:
 
 ```sh
-deploy/fix-permissions.sh
+make fix-permissions
 ```
+
+The underlying command is `go -C toolchain run ./fix-permissions`; it accepts
+`--path` to select another tree and `--dry-run` to print the affected paths.
 
 ## Security
 
@@ -243,4 +265,4 @@ mode 0600 and the agent does not open a network listener by default.
 - Containers in a different PID namespace need PID translation; the agent
   reads `NSpid` from `/proc/<pid>/status`.
 - Target libraries are resolved through `/proc/<pid>/root/...`.
-- Host `sysctl` changes are not required for the provided scripts.
+- Host `sysctl` changes are not required for the provided toolchain commands.
