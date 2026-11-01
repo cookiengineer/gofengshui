@@ -63,6 +63,40 @@ func BenchmarkCheckAccess(b *testing.B) {
 	}
 }
 
+func BenchmarkScoreWindow(b *testing.B) {
+	windows := make([]TimelineWindow, 0, 20)
+	for i := 0; i < 20; i++ {
+		windows = append(windows, TimelineWindow{
+			ID:     uint64(i + 1),
+			Events: 100,
+			Allocs: 60,
+			Frees:  40,
+			Live:   64,
+			Freed:  20,
+			Rates: RateWindow{
+				Events:      400,
+				Allocs:      240,
+				Frees:       160,
+				Reallocs:    4,
+				BytesPerSec: 8192,
+			},
+			Reuse: ReuseWindow{Count: 8, SameClass: 4},
+			Classes: []ClassWindow{
+				{ChunkSize: 0x20, Live: 48, LiveShare: 0.75, ByteShare: 0.5},
+				{ChunkSize: 0x40, Live: 16, LiveShare: 0.25, ByteShare: 0.5},
+			},
+		})
+	}
+	baseline := BuildBaseline("bench", "bench", DefaultProfile(), windows)
+	w := windows[len(windows)-1]
+	cfg := DefaultAnomalyConfig()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ScoreWindow(w, baseline, cfg)
+	}
+}
+
 func BenchmarkTimelineObserve(b *testing.B) {
 	tl := NewTimeline(DefaultTimelineConfig())
 	ev := core.Event{PID: 1, TID: 1, Addr: 0x10000, Size: 0x20, ReqSize: 0x18}

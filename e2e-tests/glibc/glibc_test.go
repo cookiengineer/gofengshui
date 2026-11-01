@@ -71,6 +71,63 @@ func verifyGlibcAnomaly(t *testing.T, reports string) {
 	checks.RequireBaselineContent(t, filepath.Join(reports, "anomaly", "baseline-model.json"))
 }
 
+func TestGlibcAnomalyMatrix(t *testing.T) {
+	harness.RequireRoot(t)
+	run := harness.NewRun(t)
+	runCase(t, run, caseSpec{
+		name:       "glibc-anomaly-matrix",
+		variant:    "ubuntu-24.04",
+		baseImage:  "ubuntu:24.04",
+		victimArgs: []string{"-test.run", "^TestGlibcAnomalyMatrix$"},
+		verify:     verifyGlibcAnomalyMatrix,
+	})
+}
+
+func verifyGlibcAnomalyMatrix(t *testing.T, reports string) {
+	t.Helper()
+
+	var benign anomalyMatrix
+	readMatrix(t, filepath.Join(reports, anomalyBenignFile), &benign)
+	if benign.Summary.Scorable < 4 {
+		t.Fatalf("benign matrix has only %d scorable runs, want at least 4", benign.Summary.Scorable)
+	}
+	if benign.Summary.FalsePositive != 0 {
+		for _, run := range benign.Runs {
+			if run.Scorable && (run.D10 > 0 || run.D11 > 0) {
+				t.Logf("false positive: fixture=%s mode=%s d10=%d d11=%d max_score=%.2f findings=%v",
+					run.Fixture, run.Mode, run.D10, run.D11, run.MaxScore, run.Findings)
+			}
+		}
+		t.Fatalf("benign false-positive rate: %d/%d (%.3f)",
+			benign.Summary.FalsePositive, benign.Summary.Scorable, benign.Summary.FPR)
+	}
+
+	var exploit anomalyMatrix
+	readMatrix(t, filepath.Join(reports, anomalyExploitFile), &exploit)
+	groomDetected := false
+	for _, run := range exploit.Runs {
+		t.Logf("exploit %s: scorable=%v windows=%d d10=%d d11=%d latency_measured=%v latency=%dw/%dms max_score=%.2f",
+			run.Mode, run.Scorable, run.Windows, run.D10, run.D11, run.LatencyMeasured,
+			run.LatencyWindows, run.LatencyMS, run.MaxScore)
+		if run.ExpectedStructural != "" && run.ExitCode != 0 {
+			t.Fatalf("exploit %s did not emit %s (exit %d)", run.Mode, run.ExpectedStructural, run.ExitCode)
+		}
+		if run.Mode == "groom" && run.D10 > 0 {
+			groomDetected = true
+		}
+	}
+	if !groomDetected {
+		t.Fatal("groom positive control did not emit D10")
+	}
+
+	var overhead anomalyOverheadReport
+	readMatrix(t, filepath.Join(reports, anomalyOverheadFile), &overhead)
+	if len(overhead.Medians) == 0 {
+		t.Fatal("overhead matrix is empty")
+	}
+	t.Logf("overhead medians: %v", overhead.Medians)
+}
+
 func TestGlibcMatrix(t *testing.T) {
 	harness.RequireRoot(t)
 	run := harness.NewRun(t)

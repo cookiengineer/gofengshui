@@ -47,7 +47,10 @@ TESTBINS := $(BUILD_DIR)/testdata/alloc_loop \
             $(BUILD_DIR)/testdata/tcache_introspect \
             $(BUILD_DIR)/testdata/tcache_threads \
             $(BUILD_DIR)/testdata/oom \
-            $(BUILD_DIR)/testdata/anomaly_groom
+            $(BUILD_DIR)/testdata/anomaly_groom \
+            $(BUILD_DIR)/testdata/anomaly_benign \
+            $(BUILD_DIR)/testdata/anomaly_exploit \
+            $(BUILD_DIR)/testdata/anomaly_bench
 
 TESTLIBS := $(BUILD_DIR)/testdata/libgfsplugin.so
 E2E_DIR := e2e-tests
@@ -55,7 +58,7 @@ E2E_LOG := $(BUILD_DIR)/logs/e2e-$$(date +%Y%m%d-%H%M%S).log
 TOOLCHAIN_DIR := toolchain
 TOOLCHAIN_BIN := $(BUILD_DIR)/toolchain
 
-.PHONY: all build generate bpf test test-c bench dist clean fmt vet e2e e2e-anomaly e2e-image e2e-clean \
+.PHONY: all build generate bpf test test-c bench dist clean fmt vet e2e e2e-anomaly e2e-anomaly-matrix e2e-image e2e-clean \
         toolchain toolchain-test toolchain-vet check-env dev-image dev-container host-agent fix-permissions
 
 all: build
@@ -118,7 +121,16 @@ e2e-anomaly:
 	@test "$$(id -u)" = "0" || { echo "e2e anomaly test must run as root; use: sudo -E make e2e-anomaly"; exit 1; }
 	@mkdir -p $(BUILD_DIR)/logs
 	@log="$$(pwd)/$(E2E_LOG)"; ln -sfn "$$log" $(BUILD_DIR)/logs/latest-e2e.log; \
-	  $(GO) -C $(E2E_DIR) test -count=1 -p 1 -timeout=30m -v ./glibc -run 'TestGlibcAnomaly' 2>&1 | tee -a "$$log"; status=$${PIPESTATUS[0]}; \
+	  $(GO) -C $(E2E_DIR) test -count=1 -p 1 -timeout=30m -v ./glibc -run '^TestGlibcAnomaly$$' 2>&1 | tee -a "$$log"; status=$${PIPESTATUS[0]}; \
+	  chown -R "$${SUDO_UID:-0}:$${SUDO_GID:-0}" $(BUILD_DIR)/e2e $(BUILD_DIR)/logs $(BUILD_DIR)/gofengshui $(BUILD_DIR)/bpf source/ebpf/object_generated.go 2>/dev/null || true; \
+	  exit $$status
+
+e2e-anomaly-matrix: SHELL := /bin/bash
+e2e-anomaly-matrix:
+	@test "$$(id -u)" = "0" || { echo "e2e anomaly matrix must run as root; use: sudo -E make e2e-anomaly-matrix"; exit 1; }
+	@mkdir -p $(BUILD_DIR)/logs
+	@log="$$(pwd)/$(E2E_LOG)"; ln -sfn "$$log" $(BUILD_DIR)/logs/latest-e2e.log; \
+	  $(GO) -C $(E2E_DIR) test -count=1 -p 1 -timeout=45m -v ./glibc -run 'TestGlibcAnomalyMatrix' 2>&1 | tee -a "$$log"; status=$${PIPESTATUS[0]}; \
 	  chown -R "$${SUDO_UID:-0}:$${SUDO_GID:-0}" $(BUILD_DIR)/e2e $(BUILD_DIR)/logs $(BUILD_DIR)/gofengshui $(BUILD_DIR)/bpf source/ebpf/object_generated.go 2>/dev/null || true; \
 	  exit $$status
 

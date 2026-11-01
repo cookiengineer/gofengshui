@@ -16,6 +16,7 @@ type AnomalyConfig struct {
 	StructuralWeight float64 `json:"structural_weight"`
 	Threshold        float64 `json:"threshold"`
 	HighThreshold    float64 `json:"high_threshold"`
+	MinHistogramLive int     `json:"min_histogram_live"`
 }
 
 // DefaultAnomalyConfig returns a conservative starting point.
@@ -30,6 +31,7 @@ func DefaultAnomalyConfig() AnomalyConfig {
 		StructuralWeight: 3,
 		Threshold:        8,
 		HighThreshold:    16,
+		MinHistogramLive: 32,
 	}
 }
 
@@ -66,7 +68,10 @@ func ScoreWindow(w TimelineWindow, b BaselineModel, cfg AnomalyConfig) AnomalySc
 		BaselineWindows: b.Windows,
 	}
 
-	js := JensenShannonWindow(w, b)
+	var js float64
+	if cfg.MinHistogramLive <= 0 || w.Live >= cfg.MinHistogramLive {
+		js = JensenShannonWindow(w, b)
+	}
 	hist := js * cfg.HistogramWeight
 	score.Components["histogram"] = hist
 	if js > 0 {
@@ -116,11 +121,11 @@ func ScoreWindow(w TimelineWindow, b BaselineModel, cfg AnomalyConfig) AnomalySc
 
 	if w.Content != nil && w.Content.Samples > 0 && b.Content.Samples.Count > 0 {
 		contentZ := maxRobustZ([]float64{
-			RobustZ(w.Content.Entropy, b.Content.Entropy),
-			RobustZ(w.Content.PrintableRatio, b.Content.PrintableRatio),
-			RobustZ(w.Content.PointerRatio, b.Content.PointerRatio),
-			RobustZ(w.Content.ZeroRatio, b.Content.ZeroRatio),
-			RobustZ(w.Content.TopQwordRatio, b.Content.TopQwordRatio),
+			robustZFloor(w.Content.Entropy, b.Content.Entropy, 0.5),
+			robustZFloor(w.Content.PrintableRatio, b.Content.PrintableRatio, 0.1),
+			robustZFloor(w.Content.PointerRatio, b.Content.PointerRatio, 0.1),
+			robustZFloor(w.Content.ZeroRatio, b.Content.ZeroRatio, 0.1),
+			robustZFloor(w.Content.TopQwordRatio, b.Content.TopQwordRatio, 0.1),
 		})
 		content := contentZ * cfg.ContentWeight
 		score.Components["content"] = content
@@ -162,6 +167,21 @@ func RobustZ(x float64, s RobustStats) float64 {
 	}
 	if scale < 1e-9 {
 		scale = 1
+	}
+	z := math.Abs(x-s.Median) / scale
+	if z > 10 {
+		z = 10
+	}
+	return z
+}
+
+func robustZFloor(x float64, s RobustStats, floor float64) float64 {
+	if s.Count == 0 {
+		return 0
+	}
+	scale := 1.4826 * s.MAD
+	if scale < floor {
+		scale = floor
 	}
 	z := math.Abs(x-s.Median) / scale
 	if z > 10 {

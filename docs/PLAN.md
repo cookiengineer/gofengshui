@@ -142,6 +142,14 @@ Signals:
 - content entropy/pointer-density deviations
 - D7/D8/D9 findings as structural evidence
 
+Robustness constraints:
+
+- Windows with fewer than 32 live chunks skip histogram divergence; a class
+  distribution over a handful of chunks is noise, not a signal.
+- Content metrics use minimum scale floors (0.5 entropy, 0.1 ratios) because a
+  one-sample content baseline has `MAD=0`. Without a floor, any benign content
+  shift becomes a maximum-confidence deviation.
+
 Score composition:
 
 ```text
@@ -265,31 +273,33 @@ Acceptance: exploit fixtures trigger D11; benign fixtures do not.
 
 ## Current Status
 
-As of 2026-10-31:
+As of 2026-11-01:
 
 - Phases 0-4 are implemented.
 - Phase 2.1 is partial: the baseline uses median/MAD but not EWMA or per-class
   quantile bands.
-- Phase 5 is partial: offline analysis, a privileged anomaly e2e case, docs and
-  report assertions are in place; the full regression, benign false-positive
-  matrix, exploit detection-latency matrix and overhead measurements are not.
-- The privileged `sudo -E make e2e-anomaly` case passes. It emits D10 on the
-  `anomaly_groom` fixture and validates the timeline/anomaly/baseline exports.
-- Fast targets can finish warmup before the first content-sampling tick, so the
-  content baseline can be empty in short runs.
+- Phase 5 is partial: offline analysis, the focused anomaly e2e case, the
+  anomaly validation matrix, docs and report assertions are in place. The
+  matrix records FPR 0/8 on scorable benign runs, exploit D10 latency and
+  collector/scoring/content overhead. The full privileged e2e still needs a
+  run with the matrix/musl base images available.
+- The focused `sudo -E make e2e-anomaly` and the broader
+  `sudo -E make e2e-anomaly-matrix` both pass.
+- Fast targets can still finish warmup before the first content-sampling tick,
+  so the content baseline can contain a single sample; content scoring uses
+  scale floors to stay stable in that case.
 
 See `docs/TASKS.md` for task-level status and `HANDOVER.md` for the next
 session checklist.
 
 ## Next Work
 
-1. Run the full privileged regression: `sudo -E make e2e`.
-2. Run the complete benign and exploit fixture matrices and record
-   false-positive rate and detection latency.
-3. Use the measurements to tune D10 thresholds and the content-sampling cadence.
-4. Add EWMA and per-class quantile bands.
-5. Ensure content is sampled during warmup on fast targets.
-6. Measure timeline and content-sampling overhead.
+1. Run the full privileged regression with `GFS_E2E_PULL=1 sudo -E make e2e`.
+2. Add EWMA and per-class quantile bands (task 2.10) using the recorded
+   FPR/latency baseline.
+3. Extend the matrix with scorable variants of the short benign fixtures and a
+   reliable D11 escalation case.
+4. Re-tune D10 thresholds and content cadence only against matrix deltas.
 
 ## Validation
 
@@ -325,4 +335,9 @@ Regression checks:
   or batch jobs; phase markers and warmup windows mitigate this.
 - `D10`/`D11` are probabilistic evidence. They do not prove an unknown
   vulnerability exists.
+- `D10` is a timeline anomaly. Single-event primitives such as metadata
+  corruption or double free are covered by the structural detectors and are not
+  expected to emit `D10`.
+- Very short workloads may not produce enough windows for a baseline; the
+  matrix reports those runs as non-scorable instead of treating them as clean.
 - The agent remains root-equivalent and belongs in a sandboxed environment.

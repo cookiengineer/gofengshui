@@ -11,16 +11,19 @@ import (
 )
 
 type HeapReport struct {
-	Allocations   []core.Allocation   `json:"allocations"`
-	Tombstones    []heap.Tombstone    `json:"tombstones"`
-	Mappings      []heap.Mmap         `json:"mappings"`
-	Stats         heap.Stats          `json:"stats"`
-	Profile       heap.Profile        `json:"profile"`
-	Analysis      heap.Analysis       `json:"analysis"`
-	Backfill      *heap.BackfillStats `json:"backfill"`
-	Introspection *heap.Introspection `json:"introspection"`
-	Findings      []core.Finding      `json:"findings"`
-	BPF           json.RawMessage     `json:"bpf"`
+	Allocations   []core.Allocation     `json:"allocations"`
+	Tombstones    []heap.Tombstone      `json:"tombstones"`
+	Mappings      []heap.Mmap           `json:"mappings"`
+	Stats         heap.Stats            `json:"stats"`
+	Profile       heap.Profile          `json:"profile"`
+	Analysis      heap.Analysis         `json:"analysis"`
+	Backfill      *heap.BackfillStats   `json:"backfill"`
+	Introspection *heap.Introspection   `json:"introspection"`
+	Findings      []core.Finding        `json:"findings"`
+	Timeline      []heap.TimelineWindow `json:"timeline"`
+	Anomalies     []heap.AnomalyScore   `json:"anomalies"`
+	Baseline      *heap.BaselineModel   `json:"baseline_model"`
+	BPF           json.RawMessage       `json:"bpf"`
 }
 
 type BaselineReport struct {

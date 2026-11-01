@@ -70,20 +70,30 @@ See `HANDOVER.md` for the next-session checklist and verified evidence.
 | # | Task | Status |
 |---|---|---|
 | 5.1 | Add offline calibration workflow (`gofengshui analyze`) | done |
-| 5.2 | Run benign fixture matrix and record false-positive rate | partial |
-| 5.3 | Run exploit fixture matrix and record detection latency | partial |
-| 5.4 | Measure collector and content-sampling overhead | partial |
+| 5.2 | Run benign fixture matrix and record false-positive rate | done |
+| 5.3 | Run exploit fixture matrix and record detection latency | done |
+| 5.4 | Measure collector and content-sampling overhead | done |
 | 5.5 | Update `docs/PROTOCOL.md`, `README.md` and e2e expectations | done |
 | 5.6 | Run the full privileged `sudo -E make e2e` regression | partial |
-| 5.7 | Record benign false-positive and exploit detection-latency numbers | todo |
+| 5.7 | Record benign false-positive and exploit detection-latency numbers | done |
+| 5.8 | Add anomaly validation matrix harness (`e2e-anomaly-matrix`) | done |
+| 5.9 | Skip histogram scoring below a minimum live-chunk count | done |
+| 5.10 | Add content-metric scoring scale floors | done |
+| 5.11 | Re-run full privileged e2e with base images available | todo |
 
 ## Known Gaps
 
 - Phase 2.1 uses median/MAD but not EWMA or quantile bands yet.
-- The full `sudo -E make e2e` run passed `TestGlibc` and `TestGlibcAnomaly`, but
-  `TestGlibcMatrix` skipped because the `ubuntu:20.04`, `ubuntu:22.04` and
-  `debian-12` base images are not available locally. The complete benign and
-  exploit matrices are still pending.
+- The benign matrix has 8 scorable runs and 0 false positives at
+  `warmup=8`, `window-events=256`, `window-ms=250`. `realloc_churn`,
+  `arena_backfill`, `dlopen_alloc` and `cxx_alloc` are not scorable at that
+  window size because they produce too few events.
+- `metadata`, `double_free` and `crash` do not produce D10 by design; D10 is a
+  timeline anomaly and those single-event primitives are covered by D8, D1 and
+  D6. D11 was not emitted by the current `control` fixture in the latest run.
+- The full `sudo -E make e2e` regression still needs a run with the
+  `ubuntu:20.04`, `ubuntu:22.04`, `debian:12` and `alpine:3.20` base images
+  available (use `GFS_E2E_PULL=1`).
 
 ## Verification Notes
 
@@ -157,3 +167,35 @@ See `HANDOVER.md` for the next-session checklist and verified evidence.
 - Content sampling produced timeline content summaries with 16-32 sampled
   chunks, but the fast fixture completed warmup before the first content tick,
   so content did not contribute to the baseline in this run.
+
+### 2026-11-01 — anomaly validation matrix
+
+- Added `TestGlibcAnomalyMatrix` and the `e2e-anomaly-matrix` target. The
+  matrix runs benign FPR, exploit latency and overhead subtests inside the
+  privileged Ubuntu 24.04 container and writes `anomaly-benign.json`,
+  `anomaly-exploit.json` and `anomaly-overhead.json`.
+- Added warmup-prefixed fixtures `anomaly_benign.c`, `anomaly_exploit.c` and
+  `anomaly_bench.c`; the existing exploit fixtures were too short to fill a
+  timeline warmup.
+- Measured pre-tuning FPR at `warmup=4/window=64`: 5/9 benign runs emitted D10.
+  At `warmup=8/window=256`: 2/8 (`threads`, `attach_threads`).
+- Added `AnomalyConfig.MinHistogramLive = 32`. Benign thread windows had only
+  4-8 live chunks, so their class histograms were noise. Histogram scoring is
+  now skipped below the minimum. Content metrics also use scale floors (0.5
+  entropy, 0.1 ratios) so a one-sample baseline does not turn a small shift
+  into `z=10`.
+- Final privileged matrix: **FPR 0/8** scorable benign runs. `groom`,
+  `poison`, `size_swap` and `control` emitted D10. Latency: `groom` 1 window /
+  7 ms, `poison` 0 windows / <1 ms, `size_swap` 0 windows / <1 ms, `control`
+  1 window / 6 ms. `metadata`, `double_free` and `crash` emitted their
+  structural findings (D8/D1/D6) but no D10.
+- Overhead medians over three runs: collector 2901 ms, scoring 2611 ms,
+  content 2581 ms (target phase fixed at 1500 ms; differences are within
+  run-to-run noise). Benchmarks: `BenchmarkTimelineObserve` 406 ns/op and
+  `BenchmarkScoreWindow` 732 ns/op (16 cores, 4 allocs/op each).
+- Verification: `go -C source test ./...`, `go -C source vet ./...`,
+  `make build`, `make test-c`, e2e internal tests, host/victim compilation and
+  `sudo -E make e2e-anomaly-matrix`. The matrix log is
+  `build/logs/e2e-20261101-062541-42177.log`.
+- Full `sudo -E make e2e` is still pending; it needs the root podman store to
+  have the matrix/musl base images (`GFS_E2E_PULL=1`).

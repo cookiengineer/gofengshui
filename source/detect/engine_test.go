@@ -60,7 +60,9 @@ func TestEngineEmitsD10(t *testing.T) {
 	baseline := heap.BuildBaseline("key", "test", heap.DefaultProfile(), []heap.TimelineWindow{base})
 	e := New(nil)
 	e.Timeline().SetConfig(heap.TimelineConfig{WindowEvents: 1, WindowMS: 1000, MaxWindows: 8})
-	tr := e.EnableAnomaly(AnomalyTrackerConfig{WarmupWindows: 1, Score: heap.DefaultAnomalyConfig()})
+	scoreCfg := heap.DefaultAnomalyConfig()
+	scoreCfg.MinHistogramLive = 0
+	tr := e.EnableAnomaly(AnomalyTrackerConfig{WarmupWindows: 1, Score: scoreCfg})
 	tr.SetBaseline(&baseline)
 
 	findings := e.Observe(core.Event{

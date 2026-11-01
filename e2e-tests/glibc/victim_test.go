@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -202,6 +203,221 @@ func TestGlibcAnomaly(t *testing.T) {
 		}
 	}
 	checks.RequireBaselineContent(t, filepath.Join(res.ReportDir, "baseline-model.json"))
+}
+
+func anomalyMatrixConfigDefault() anomalyMatrixConfig {
+	return anomalyMatrixConfig{
+		Warmup:          8,
+		WindowEvents:    256,
+		WindowMS:        250,
+		ContentSample:   true,
+		ContentSampleMS: 250,
+		ContentChunks:   16,
+	}
+}
+
+func (c anomalyMatrixConfig) args() []string {
+	args := []string{
+		"--anomaly",
+		"--anomaly-warmup", strconv.Itoa(c.Warmup),
+		"--anomaly-window-events", strconv.Itoa(c.WindowEvents),
+		"--anomaly-window-ms", strconv.Itoa(c.WindowMS),
+	}
+	if c.ContentSample {
+		args = append(args,
+			"--content-sample",
+			"--content-sample-ms", strconv.Itoa(c.ContentSampleMS),
+			"--content-sample-chunks", strconv.Itoa(c.ContentChunks),
+		)
+	}
+	return args
+}
+
+func summarizeAnomalyMatrix(runs []anomalyRun) anomalyMatrixSummary {
+	var summary anomalyMatrixSummary
+	for _, run := range runs {
+		if run.Scorable {
+			summary.Scorable++
+			if run.D10 > 0 || run.D11 > 0 {
+				summary.FalsePositive++
+			}
+		}
+		if run.D10 > 0 || run.D11 > 0 {
+			summary.Detected++
+		}
+	}
+	if summary.Scorable > 0 {
+		summary.FPR = float64(summary.FalsePositive) / float64(summary.Scorable)
+	}
+	return summary
+}
+
+func medianInt64(values []int64) int64 {
+	if len(values) == 0 {
+		return 0
+	}
+	sorted := append([]int64(nil), values...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	return sorted[len(sorted)/2]
+}
+
+func parseBenchOutput(path string) (int64, uint64) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, 0
+	}
+	var elapsed int64
+	var iterations uint64
+	_, _ = fmt.Sscanf(string(data), "elapsed_ms=%d iterations=%d", &elapsed, &iterations)
+	return elapsed, iterations
+}
+
+func TestGlibcAnomalyMatrix(t *testing.T) {
+	r := agentrun.NewRunner(t)
+	cfg := anomalyMatrixConfigDefault()
+
+	t.Run("benign", func(t *testing.T) {
+		_ = os.Remove(anomalyMarkerPath)
+		cases := []struct {
+			name    string
+			fixture string
+			mode    string
+		}{
+			{name: "benign-steady", fixture: "anomaly_benign", mode: "steady"},
+			{name: "benign-churn", fixture: "anomaly_benign", mode: "churn"},
+			{name: "benign-threads", fixture: "anomaly_benign", mode: "threads"},
+			{name: "benign-realloc", fixture: "anomaly_benign", mode: "realloc"},
+			{name: "benign-burst", fixture: "anomaly_benign", mode: "burst"},
+			{name: "alloc_loop", fixture: "alloc_loop"},
+			{name: "realloc_churn", fixture: "realloc_churn"},
+			{name: "threads", fixture: "threads"},
+			{name: "attach_threads", fixture: "attach_threads"},
+			{name: "arena_backfill", fixture: "arena_backfill"},
+			{name: "dlopen_alloc", fixture: "dlopen_alloc"},
+			{name: "cxx_alloc", fixture: "cxx_alloc"},
+		}
+		runs := make([]anomalyRun, 0, len(cases))
+		for _, c := range cases {
+			c := c
+			t.Run(c.name, func(t *testing.T) {
+				target := []string{fixture(r, c.fixture)}
+				if c.mode != "" {
+					target = append(target, c.mode)
+				}
+				res := r.Run(t, "anomaly-"+c.name, agentrun.Options{
+					Args:         cfg.args(),
+					Target:       target,
+					Timeout:      120 * time.Second,
+					AllowFailure: true,
+				})
+				run := summarizeAnomalyRun(t, "benign", c.fixture, c.mode, res, "")
+				t.Logf("benign %s: scorable=%v windows=%d scored=%d d10=%d d11=%d max=%.2f",
+					c.name, run.Scorable, run.Windows, run.Scored, run.D10, run.D11, run.MaxScore)
+				runs = append(runs, run)
+			})
+		}
+		matrix := anomalyMatrix{
+			Generated: time.Now(),
+			Config:    cfg,
+			Runs:      runs,
+			Summary:   summarizeAnomalyMatrix(runs),
+		}
+		writeMatrix(t, filepath.Join(r.Reports, anomalyBenignFile), matrix)
+		t.Logf("benign FPR: %d/%d (%.3f)", matrix.Summary.FalsePositive, matrix.Summary.Scorable, matrix.Summary.FPR)
+	})
+
+	t.Run("exploit", func(t *testing.T) {
+		cases := []struct {
+			name       string
+			mode       string
+			structural string
+			extra      []string
+		}{
+			{name: "groom", mode: "groom"},
+			{name: "poison", mode: "poison", structural: "D7"},
+			{name: "metadata", mode: "metadata", structural: "D8"},
+			{name: "size_swap", mode: "size_swap", structural: "D9"},
+			{name: "double_free", mode: "double_free", structural: "D1"},
+			{name: "crash", mode: "crash", structural: "D6"},
+			{name: "control", mode: "control", structural: "D6"},
+		}
+		runs := make([]anomalyRun, 0, len(cases))
+		for _, c := range cases {
+			c := c
+			t.Run(c.name, func(t *testing.T) {
+				_ = os.Remove(anomalyMarkerPath)
+				args := append(cfg.args(), c.extra...)
+				if c.structural != "" {
+					args = append(args, "--expect-findings", c.structural)
+				}
+				res := r.Run(t, "anomaly-exploit-"+c.name, agentrun.Options{
+					Args:         args,
+					Target:       []string{fixture(r, "anomaly_exploit"), c.mode},
+					Timeout:      120 * time.Second,
+					AllowFailure: true,
+				})
+				run := summarizeAnomalyRun(t, "exploit", "anomaly_exploit", c.mode, res, c.structural)
+				t.Logf("exploit %s: exit=%d scorable=%v windows=%d d10=%d d11=%d measured=%v latency=%d windows/%d ms",
+					c.name, run.ExitCode, run.Scorable, run.Windows, run.D10, run.D11,
+					run.LatencyMeasured, run.LatencyWindows, run.LatencyMS)
+				runs = append(runs, run)
+			})
+		}
+		summary := anomalyMatrixSummary{}
+		for _, run := range runs {
+			if run.D10 > 0 || run.D11 > 0 {
+				summary.Detected++
+			}
+		}
+		matrix := anomalyMatrix{
+			Generated: time.Now(),
+			Config:    cfg,
+			Runs:      runs,
+			Summary:   summary,
+		}
+		writeMatrix(t, filepath.Join(r.Reports, anomalyExploitFile), matrix)
+	})
+
+	t.Run("overhead", func(t *testing.T) {
+		scoringCfg := cfg
+		scoringCfg.ContentSample = false
+		profiles := []struct {
+			name string
+			args []string
+		}{
+			{name: "collector"},
+			{name: "scoring", args: scoringCfg.args()},
+			{name: "content", args: cfg.args()},
+		}
+		report := anomalyOverheadReport{
+			Generated: time.Now(),
+			Medians:   make(map[string]int64, len(profiles)),
+		}
+		for _, profile := range profiles {
+			var durations []int64
+			for i := 0; i < 3; i++ {
+				name := fmt.Sprintf("anomaly-overhead-%s-%d", profile.name, i)
+				res := r.Run(t, name, agentrun.Options{
+					Args:         profile.args,
+					Target:       []string{fixture(r, "anomaly_bench")},
+					Timeout:      120 * time.Second,
+					AllowFailure: true,
+				})
+				elapsed, iterations := parseBenchOutput(filepath.Join(res.ReportDir, "target.stdout"))
+				sample := anomalyOverheadSample{
+					Profile:         profile.name,
+					DurationMS:      res.Duration.Milliseconds(),
+					TargetElapsedMS: elapsed,
+					Iterations:      iterations,
+				}
+				report.Runs = append(report.Runs, sample)
+				durations = append(durations, sample.DurationMS)
+			}
+			report.Medians[profile.name] = medianInt64(durations)
+			t.Logf("overhead %s median=%d ms", profile.name, report.Medians[profile.name])
+		}
+		writeMatrix(t, filepath.Join(r.Reports, anomalyOverheadFile), report)
+	})
 }
 
 func TestGlibcProfiles(t *testing.T) {
