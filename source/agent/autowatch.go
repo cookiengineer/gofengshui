@@ -188,9 +188,13 @@ func (s *Session) autoWatchHit(st debugger.Stop) bool {
 		}
 		findings[i].Details["source"] = "hardware-watchpoint"
 		findings[i].Details["watchpoint_id"] = id
-		s.engine.Add(findings[i])
+		extra := s.engine.Add(findings[i])
 		fc := findings[i]
 		s.broadcast("finding", StreamEvent{Kind: "finding", Finding: &fc})
+		for _, x := range extra {
+			xc := x
+			s.broadcast("finding", StreamEvent{Kind: "finding", Finding: &xc})
+		}
 	}
 	if err := s.tracer.Continue(st.TID); err != nil {
 		s.broadcast("error", StreamEvent{Kind: "error", Message: "auto-watch continue: " + err.Error()})

@@ -1,319 +1,159 @@
 # Task Tracking
 
-Status legend: `yes`, `partial`, `no`. Updated incrementally during work.
+Status legend: `todo`, `in_progress`, `partial`, `done`, `blocked`.
 
-## M0 — Scaffold and privileged harness
+The existing D1–D9 detectors, heap model, introspection, prediction, protocol
+and export pipeline are treated as the current foundation and are not re-listed
+here. This file tracks the anomaly-detection work described in `docs/PLAN.md`.
+See `HANDOVER.md` for the next-session checklist and verified evidence.
 
-| # | Task | Implemented? | Tested? | Verified? |
-|---|---|---|---|---|
-| M0.1 | Repository layout (`source/`, `bpf/`, `build/`, `docs/`, `toolchain/`, `e2e-tests/`) | yes | yes | yes |
-| M0.2 | `Makefile` targets (`generate`, `build`, `test`, `test-c`, `clean`, `fmt`, `vet`) | yes | yes | yes |
-| M0.3 | BPF C module and shared event/map headers | yes | yes | yes |
-| M0.4 | BPF object -> embedded Go byte-slice generator | yes | yes | yes |
-| M0.5 | eBPF loader and ringbuf decoder | yes | yes | yes |
-| M0.6 | C test harness with `gfs_sink` and PoCs | yes | yes | yes |
-| M0.7 | Go toolchain commands for privileged container workflows | yes | yes | yes |
-| M0.8 | Static `CGO_ENABLED=0` binary build | yes | yes | yes |
-| M0.9 | malloc/free JSONL event stream | yes | yes | yes |
-| M0.10 | Double-free detection | yes | yes | yes |
+## Phase 0 — Timeline schema and offline replay
 
-## M1 — eBPF tracing and remote protocol
+| # | Task | Status |
+|---|---|---|
+| 0.1 | Define `TimelineConfig`, window, class, thread, site, reuse and rate types | done |
+| 0.2 | Implement incremental collector with event-count and time windows | done |
+| 0.3 | Track live/freed class histograms and alloc/free/realloc semantics | done |
+| 0.4 | Track per-thread and per-stack-site allocation summaries | done |
+| 0.5 | Track address reuse including same-class reuse | done |
+| 0.6 | Add `ReplayTimeline` from `[]core.Event` | done |
+| 0.7 | Add offline parser for exported `events.jsonl` frames | done |
+| 0.8 | Add synthetic unit tests for windows, histograms, realloc and reuse | done |
 
-| # | Task | Implemented? | Tested? | Verified? |
-|---|---|---|---|---|
-| M1.1 | glibc allocator uprobes (malloc/calloc/realloc/free) | yes | yes | yes |
-| M1.2 | Chunk-header size measurement from BPF | yes | yes | yes |
-| M1.3 | C++ new/delete uprobes | yes | yes | yes |
-| M1.4 | Raw syscall tracing (mmap/munmap/brk/mremap/read/write) | yes | yes | yes |
-| M1.5 | ELF symbol and `/proc/<pid>/maps` resolver | yes | yes | yes |
-| M1.6 | Container filtering (cgroup ID, PID-namespace-safe) | yes | yes | yes |
-| M1.7 | Heap model and interval checks | yes | yes | yes |
-| M1.8 | D1 double/invalid free | yes | yes | yes |
-| M1.9 | D2 UAF syscall-buffer detection | yes | yes | yes |
-| M1.10 | D3 heap-overflow range detection | yes | yes | yes |
-| M1.11 | D4 OOM/allocation-failure detection | yes | yes | yes |
-| M1.12 | D6 crash classification | yes | yes | yes |
-| M1.13 | JSONL protocol framing and versioning | yes | yes | yes |
-| M1.14 | stdio transport | yes | yes | yes |
-| M1.15 | Unix-socket transport | yes | yes | yes |
-| M1.16 | Session manager and commands | yes | yes | yes |
-| M1.17 | Event subscription and cursor | yes | yes | yes |
-| M1.18 | Heap query/snapshot export | yes | yes | yes |
+## Phase 1 — Live timeline, protocol and export
 
-## M2 — ptrace control and ROP proof
+| # | Task | Status |
+|---|---|---|
+| 1.1 | Feed the collector from `detect.Engine` / live session pump | done |
+| 1.2 | Add `heap.timeline` protocol method | done |
+| 1.3 | Add `heap.timeline` to agent method discovery | done |
+| 1.4 | Export `timeline.jsonl` and include timeline data in `heap.json` | done |
+| 1.5 | Add live unit/integration tests and a benchmark | done |
 
-| # | Task | Implemented? | Tested? | Verified? |
-|---|---|---|---|---|
-| M2.1 | Locked-thread ptrace event loop | yes | yes | yes |
-| M2.2 | Spawn-under-tracer | yes | yes | yes |
-| M2.3 | Attach to running process | yes | yes | yes |
-| M2.4 | Pause / resume | yes | yes | yes |
-| M2.5 | Register and memory access | yes | yes | yes |
-| M2.6 | Software breakpoints | yes | yes | yes |
-| M2.7 | Hardware execution breakpoints | yes | yes | yes |
-| M2.8 | Hardware read/write watchpoints | yes | yes | yes |
-| M2.9 | Single-step with control-transfer decode | yes | yes | yes |
-| M2.10 | Watch an allocation by heap ID | yes | yes | yes |
-| M2.11 | Sink registration | yes | yes | yes |
-| M2.12 | Hijack watch -> single-step -> sink | yes | yes | yes |
-| M2.13 | ROP chain capture and gadget classification | yes | yes | yes |
-| M2.14 | Argument assertions and `rop.json` | yes | yes | yes |
-| M2.15 | CLI `run` / `attach` / `agent` / `ctl` / `validate` / `check` expectations | yes | yes | yes |
+## Phase 2 — Baseline learning and D10
 
-## M3 — Hardening
+| # | Task | Status |
+|---|---|---|
+| 2.1 | Add robust baseline model (median/MAD, EWMA, quantile bands) | partial |
+| 2.2 | Support warmup learning and resetting via `heap.anomaly reset` | done |
+| 2.3 | Support stored baseline load/save keyed by executable and profile | done |
+| 2.4 | Implement histogram divergence and rate deviation scoring | done |
+| 2.5 | Implement CUSUM change-point detection | done |
+| 2.6 | Emit D10 findings from closed windows | done |
+| 2.7 | Add `heap.anomaly` and baseline `learn` protocol extensions | done |
+| 2.8 | Add CLI anomaly and baseline flags | done |
+| 2.9 | Add D10 report section and `anomalies.json` / `baseline-model.json` export | done |
+| 2.10 | Add EWMA and per-class quantile bands (2.1 currently has median/MAD only) | todo |
 
-| # | Task | Implemented? | Tested? | Verified? |
-|---|---|---|---|---|
-| M3.1 | Multi-thread tracing, clone hooks, per-thread debug registers | yes | yes | yes |
-| M3.2 | Stop-the-world for all traced threads | yes | yes | yes |
-| M3.3 | fork/exec follow | yes | yes | yes |
-| M3.4 | dlopen rescan / re-attach (`maps.refresh`, resolver retry) | yes | yes | yes |
-| M3.5 | tcache / main_arena introspection | yes | yes | no |
-| M3.6 | Additional syscall coverage (`openat`, `execve`, `sendfile`, `splice`) | yes | yes | yes |
-| M3.7 | OOM tracepoint/kprobe integration | yes | yes | yes |
-| M3.8 | Performance/overhead benchmarks | yes | yes | yes |
-| M3.9 | musl backend | no | no | no |
-| M3.10 | Go runtime backend | no | no | no |
-| M3.11 | Docs and CI assertion DSL | yes | partial | no |
-| M3.12 | Heap-feng-shui analysis (size classes, gaps, reuse) | yes | yes | yes |
-| M3.13 | Per-process allocator uprobes covering all threads + fork/exec reattach | yes | yes | yes |
-| M3.14 | Tcache/free-list reuse prediction (`heap.predict`) | yes | yes | yes |
-| M3.15 | Attach-time main-heap and thread-arena backfill | yes | yes | yes |
-| M3.16 | CLI CI expectations (`--expect-findings`, `--expect-no-findings`, `--expect-regs`) | yes | yes | yes |
-| M3.17 | glibc allocator profile detection and `--glibc-version` override | yes | yes | yes |
-| M3.18 | D7 tcache free-list link / safe-linking anomaly detector | yes | yes | yes |
-| M3.19 | D6 fault address/access via `PTRACE_GETSIGINFO` and stack hits | yes | yes | yes |
-| M3.20 | Realloc-aware heap timeline (moved and in-place) | yes | yes | yes |
-| M3.21 | Baseline diff + spray recipe (`heap.baseline`/`diff`/`recipe`) | yes | yes | yes |
-| M3.22 | D8 chunk/next-chunk metadata corruption detector | yes | yes | yes |
-| M3.23 | Automatic freed-chunk write watchpoints (`--watch-freed`) | yes | yes | yes |
-| M3.24 | D9 allocated-vs-free chunk size mismatch detector | yes | yes | yes |
-| M3.25 | Per-arena bin modeling (tcache stays per-thread) | yes | yes | yes |
-| M3.26 | glibc 2.42+ tcache layout, 2.44 fill count and no-fastbin profile | yes | yes | no |
-| M3.27 | `heap.introspect` tcache/arena introspection on stripped libc | yes | yes | no |
-| M3.28 | Observed-bin prediction (`heap.predict observe`) | yes | yes | no |
+## Phase 3 — Sampled content analysis
 
-## E2E Test Migration
+| # | Task | Status |
+|---|---|---|
+| 3.1 | Add safe periodic pause/sample/resume path | done |
+| 3.2 | Add stratified chunk selection and sampling budget | done |
+| 3.3 | Compute entropy, printable, pointer-density and repeated-qword metrics | done |
+| 3.4 | Add content baseline metrics and scoring | done |
+| 3.5 | Add content sampling tests with synthetic buffers | done |
+| 3.6 | Ensure fast targets collect content during warmup, not only after it | done |
 
-| # | Task | Implemented? | Tested? | Verified? |
-|---|---|---|---|---|
-| E2E.1 | Separate `e2e-tests` Go module and root-only harness | yes | yes | yes |
-| E2E.2 | Per-case `Containerfile` layout (`glibc`, `musl`) | yes | partial | no |
-| E2E.3 | Host-side podman lifecycle, image build, victim `go test -c` flow | yes | yes | yes |
-| E2E.4 | Glibc detector/profile/concurrency/protocol/ROP/OOM victim tests | yes | yes | yes |
-| E2E.5 | Host-side typed report assertions replacing bash greps | yes | yes | yes |
-| E2E.6 | Glibc base-image matrix | yes | partial | no |
-| E2E.7 | Alpine/musl baseline case | yes | partial | no |
-| E2E.8 | Remove `deploy/run-integration.sh` and `deploy/in-container-tests.sh` | yes | yes | yes |
-| E2E.9 | `make e2e` root workflow, logs and ownership restore | yes | yes | yes |
-| E2E.10 | Replace `deploy/` shell helpers with `toolchain/` Go commands and fold host diagnostics into the harness | yes | yes | no |
+## Phase 4 — D11 phase correlation
 
-`Tested` for E2E.1-E2E.5, E2E.8 and E2E.10 means the Go modules compile,
-harness and toolchain unit tests pass, victim test binaries compile with
-`-tags victim`, the root guard works locally, and dry-run command construction
-is checked. E2E.10 still needs a privileged interactive container verification.
-`Verified` requires a privileged `sudo -E make e2e` run on the developer host.
-Container image builds could not be exercised in the current workspace because
-package registry access was unavailable.
+| # | Task | Status |
+|---|---|---|
+| 4.1 | Add NORMAL/SUSPECT/PRIMITIVE/CONTROL-FLOW state machine | done |
+| 4.2 | Correlate anomalies with structural findings and D5/D6 | done |
+| 4.3 | Emit D11 findings with evidence aggregation | done |
+| 4.4 | Add phase fields and transition details to scores and findings | done |
 
-First privileged run (2026-10-23) exercised the glibc case end-to-end and
-exposed several harness/detector issues that are now fixed:
+## Phase 5 — Validation and tuning
 
-- syscall-buffer D2 findings were deduplicated across different syscalls at the
-  same buffer address; the dedup key now includes `Arg1`/`Arg2`/`Caller`.
-- the Go victim test process's own syscalls were traced because `victim.test`
-  shared the container cgroup; the binary is now copied as `gofengshui` so the
-  agent's self-event filter excludes it.
-- the unix-socket agent process now starts from the runner binary path instead
-  of relying on `agent` being in `PATH`.
-- the crash test reads the D6 message from the event stream rather than stderr.
-- the attach test uses a dedicated long-lived multi-thread fixture that keeps
-  allocating after the session attaches, and filters test-process noise.
-- the OOM container sets `memory.oom.group=0` so a bounded OOM kill does not
-  take down the Go test process.
-- the glibc matrix runs by default; missing base images skip or fail fast
-  instead of triggering long registry retries.
+| # | Task | Status |
+|---|---|---|
+| 5.1 | Add offline calibration workflow (`gofengshui analyze`) | done |
+| 5.2 | Run benign fixture matrix and record false-positive rate | partial |
+| 5.3 | Run exploit fixture matrix and record detection latency | partial |
+| 5.4 | Measure collector and content-sampling overhead | partial |
+| 5.5 | Update `docs/PROTOCOL.md`, `README.md` and e2e expectations | done |
+| 5.6 | Run the full privileged `sudo -E make e2e` regression | partial |
+| 5.7 | Record benign false-positive and exploit detection-latency numbers | todo |
 
-Second privileged run (2026-10-23): the glibc victim suite and host report
-assertions passed except the attach case. It captured zero allocations because
-the replacement fixture allocated only once before attach and then slept. A new
-`attach_threads` fixture continuously allocates from four threads for ten
-seconds; the attach case now uses it.
+## Known Gaps
 
-Third privileged run (2026-10-23): the full glibc case passed, including attach,
-all detector/profile/concurrency/protocol/ROP/OOM subtests, and the host report
-assertions. The glibc matrix was skipped because it was still opt-in at the
-time; musl was skipped because `alpine:3.20` was not present in the rootful
-image store.
-
-The host e2e tests depend on external container state, so `make e2e` now passes
-`-count=1`. Earlier repeated runs completed quickly because Go replayed cached
-package results even though the log still showed the previous podman commands.
-
-### E2E coverage gaps
-
-- The glibc e2e case does not yet exercise `heap.introspect`, `heap.predict`,
-  `heap.snapshot`, `heap.analyze`, event replay/cursor, `mem.read`/`mem.write`,
-  `regs.get`/`stack.get`, explicit breakpoint/watchpoint protocol calls, the
-  `gofengshui ctl` CLI, or `--no-ebpf`.
-- The matrix now runs the full glibc victim suite and host report assertions
-  per base image by default, but it has not yet been verified end-to-end.
-- The musl case covers allocator tracing, D1/D2/D4/D6, threads, fork/exec, and
-  the unix-socket protocol. It does not yet cover D3, ROP, OOM, attach/backfill,
-  stdio, dlopen, C++, heap analysis, or allocator introspection.
-- The musl Containerfile builds extra fixtures (`overflow`, `backfill`,
-  `arena_backfill`, `rop_sink`, `watch_alloc`, `syscall_uaf`) that the musl
-  victim tests do not use yet.
-- The matrix needs network access for base images and package installation;
-  the musl build needs network for Alpine and `build-base` unless layers are
-  cached.
-
-
-## Privileged Integration Result (2026-10-22, historical bash runner)
-
-The previous `deploy/run-integration.sh` runner completed with status 0:
-
-- D1 double-free finding observed
-- D2 UAF finding observed
-- D3 heap-overflow finding observed
-- ROP flow reached `gfs_sink` with `RDI=0x4141`
-- `rop.json` reports `verified: true`
-- reports and event streams written under `build/reports/`
-
-## Latest Privileged Run (2026-10-22, historical bash runner)
-
-All checks passed with status 0:
-
-- D1/D2/D3/D4/D6/D7 findings
-- detected glibc 2.39 profile and explicit 2.31 override verified
-- D6 fault address/classification + stack hits and D2 syscall-buffer checks verified
-- realloc churn, baseline diff and spray recipe verified over the privileged suite
-- thread-arena attach backfill, D8 metadata detection, and direct-UAF auto-watch verified
-- BPF event/drop accounting verified with `drops: 0`
-- dlopen rescan and allocator probe reattachment verified
-- C++ new/delete labelling, D9 size-mismatch detection, stack sampling, and per-arena prediction verified
-- kernel OOM capture verified with an isolated sibling victim
-- clean malloc/free loop with zero false positives
-- heap analysis export
-- multi-thread allocations from 5 threads
-- fork/exec allocations from 2 processes
-- `rop.arm` and `hijack.watch` both verified with `RDI=0x4141`
-- unix-socket session + live D2 event + close
-- stdio JSONL session with live D2 event, `wait`, and `assert`
-- attach workflow with allocator events from multiple threads
-- attach-time main-heap backfill recovered all three fixture allocations
-- CLI expectations (`--expect-findings`, `--expect-no-findings`,
-  `--expect-regs`) exercised by the suite
-
-## P0 Closure Status
-
-Privileged suite passed with status 0:
-
-- software breakpoint trigger path
-- allocation watch by heap ID with a live hardware-watchpoint trigger
-- event replay cursor
-- stdio JSONL session with live D2 event and `assert`
-- attach CLI workflow
-- attach-time main-heap backfill
-- CLI expectation runner for findings and sink registers
-- dlopen resolver refresh and allocator probe reattachment
-
-## Prediction Status
-
-`heap.predict` is implemented with deterministic unit tests for:
-
-- glibc `request2size` mapping
-- per-thread tcache LIFO order
-- consuming a predicted chunk on reallocation
-- tcache overflow into fastbin LIFO on pre-2.44 profiles
-- tcache overflow into smallbin FIFO on 2.44 (no fastbins)
-- smallbin FIFO ordering
-- per-thread isolation and `tid: 0` merging
-- glibc profile detection and safe-linking-aware decoding
-- tcache fills with the profile's fill count (7 through 2.43, 16 from 2.44)
-- observed-bin prediction from `heap.introspect`
-
-The default predictor is a userspace model based on observed free/alloc events;
-`heap.predict` with `observe: true` (or a recent `heap.introspect` snapshot)
-uses live tcache state instead.
-
-## Final Regression (2026-10-22, historical bash runner)
-
-The previous `deploy/run-integration.sh` runner completed with status 0 after the final changes:
-
-- allocator profile detection and 2.31 override
-- D7 tcache links (including self-loop/live/cross-size unit coverage)
-- D8/D9 chunk metadata and size-mismatch detection
-- D2 syscall buffers, D6 fault info/stack hits, direct-UAF auto-watch
-- realloc churn, baseline/diff and recipe
-- main-heap and thread-arena attach backfill
-- C++ new/delete labelling and dlopen probe reattachment
-- BPF stats with zero ring-buffer drops and sampled stack capture
-- kernel OOM tracepoint/kprobe capture with an isolated victim
-- privileged host gates for every item above
-
-Release packaging (`make dist`) is verified locally and is not part of the
-privileged container suite.
+- Phase 2.1 uses median/MAD but not EWMA or quantile bands yet.
+- The full `sudo -E make e2e` run passed `TestGlibc` and `TestGlibcAnomaly`, but
+  `TestGlibcMatrix` skipped because the `ubuntu:20.04`, `ubuntu:22.04` and
+  `debian-12` base images are not available locally. The complete benign and
+  exploit matrices are still pending.
 
 ## Verification Notes
 
-- `yes` under Tested means covered by an automated or executed local check.
-- `yes` under Verified means observed end-to-end in the relevant environment.
-- Implemented-but-not-fully-verified items:
-  - M1.17 event replay/cursor edge cases beyond the current replay test
-  - M3.11 CI assertion DSL beyond the implemented CLI expectation runner
-  - M3.26–M3.28 are covered by unprivileged live ptrace tests and synthetic
-    layout tests; the privileged integration suite does not yet exercise
-    `heap.introspect`
-- All other implemented items are covered by unit tests and the privileged
-  integration suite.
+- Privileged e2e runs use the existing `e2e-tests` pipeline.
+- Unprivileged work is validated with the `source` Go tests.
+- Any new root-only test helper should live under `build/` or the e2e harness
+  rather than ad-hoc shell commands.
 
-## Remaining Work
+## Progress Log
 
-### P0 — Exploit validation completeness
+### 2026-10-31
 
-| Item | Status |
-|---|---|
-| Software-breakpoint trigger/step/reinsert test | done |
-| Watch allocation by heap ID end-to-end | done |
-| Protocol `assert` command and CI runner | done |
-| Stdio JSONL end-to-end session test | done |
-| Event replay/cursor tests | done |
-| Attach CLI workflow + attach-time heap backfill | done for main heap and thread arenas |
-| dlopen rescan and reattach for new libraries | done |
-| ROP trace soundness: no sink hit on failed traces, start/sink separation, control-flow and chain checks | done (unit-tested) |
-| Agent self-event filtering (prevents protocol-write feedback and self-inflicted OOM kills; kernel OOM events exempt) | done (unit-tested) |
+- Rewrote `docs/PLAN.md` around the timeline/anomaly architecture and removed
+  completed milestone history.
+- Added `source/heap/timeline.go` with bounded event/time windows, class,
+  thread, site, reuse and rate summaries.
+- Added `source/analyze` for offline `events.jsonl` replay.
+- Wired the timeline into `detect.Engine` and live sessions.
+- Added `heap.timeline` protocol support and `timeline.jsonl` export.
+- Added `gofengshui analyze` for offline replay.
+- Verified with `go -C source test ./...`, `go -C source vet ./...`,
+  `make build`, and `BenchmarkTimelineObserve`.
+- Added live heap-state tracking across windows, so class `live`/`live_bytes`
+  describe heap composition at window close rather than net window activity.
+- Added robust baseline learning, Jensen-Shannon histogram divergence, rate,
+  count, reuse and structural scoring, and CUSUM change-point tracking.
+- Added D10 findings, `heap.anomaly`, `heap.baseline mode=learn`, baseline
+  load/save, CLI flags, and anomaly/baseline export.
+- Added sampled chunk-content analysis: class-stratified selection, entropy,
+  printable/pointer/zero/repeated-qword metrics, content baseline scoring and
+  periodic pause/sample/resume integration.
+- Added the D11 phase state machine and correlation of suspicious timeline
+  phases with control-flow findings.
+- Verification includes unprivileged Go tests, `go vet`, `make build`,
+  `make test-c`, the e2e harness unit tests, and the privileged anomaly case
+  below.
+- Added `anomaly_groom` fixture and `TestGlibcAnomaly`, which expects D10 plus
+  `timeline.jsonl`, `anomalies.json` and `baseline-model.json`.
+- `make e2e-anomaly` runs the privileged anomaly case. The host-side
+  `TestGlibcAnomaly` limits the container victim run to the anomaly subtest and
+  verifies D10 plus the timeline, anomaly and baseline exports.
 
-### P1 — Allocator depth and heap feng shui
+### 2026-11-01
 
-| Item | Status |
-|---|---|
-| Direct tcache/main_arena/bin introspection | done (`heap.introspect`) |
-| Allocator-version profiles (glibc 2.26–2.44) | done (2.42 layout, 2.44 no-fastbin/16-slot) |
-| tcache poisoning / safe-linking anomaly detector (D7) | done |
-| Realloc-style free sequences in predictor | done |
-| C++ new/delete symbol-specific probes | done |
-| Better separation of per-arena vs per-thread bins | done |
-| Baseline comparison and spray recipe export | done |
+- Fixed 3.6 content warmup: timeline windows now signal the content sampler, and
+  the anomaly tracker accumulates content summaries received before the baseline
+  is built. If warmup closes without content, the first post-warmup summary
+  seeds the empty content baseline once.
+- Added `ContentBaselineFromSummaries` and reused it from `BuildBaseline`.
+- Added `Timeline.Completed()` so the session pump can wake the sampler on
+  window close without rescanning the window ring.
+- Strengthened `TestGlibcAnomaly` to require a non-zero content baseline.
+- Verification: `go -C source test ./...`, `go -C source vet ./...`,
+  `make build`, `make test-c`, e2e internal tests, and host/victim compilation.
+- `sudo -E make e2e-anomaly` passed, including the new content-baseline
+  assertion. The learned baseline had `content.samples.count = 1` (16 chunks,
+  entropy 0.615) instead of zero.
+- Recorded the existing full e2e results: `TestGlibc` and `TestGlibcAnomaly`
+  passed; `TestGlibcMatrix` and `TestMusl` skipped due to missing base images.
 
-### P2 — Zero-day and crash validation
+### Privileged anomaly run (2026-10-31)
 
-| Item | Status |
-|---|---|
-| Kernel OOM/memcg tracepoints | OOM done; memcg deferred |
-| Fault address via `PTRACE_GETSIGINFO` | done |
-| Additional syscall buffers (`openat`, `execve`, `sendfile`, `splice`) | done |
-| Stack/callstack sanity checks | done as executable stack-window hits |
-| Type-confusion and heap-metadata corruption heuristics | D8/D9 implemented; further heuristics research |
-| Race/TOCTOU signal correlation | research |
+`sudo -E make e2e-anomaly` passed:
 
-### P3 — Portability and performance
-
-| Item | Status |
-|---|---|
-| musl allocator backend | deferred |
-| Go runtime allocator backend | deferred |
-| arm64 support | deferred |
-| Overhead benchmarks and sampling controls | done |
-| Long-running session backpressure/loss accounting | done |
-| Final packaging/docs/release artifacts | done |
+- `TestGlibcAnomaly`, `TestGlibcAnomaly/victim` and
+  `TestGlibcAnomaly/reports` all passed.
+- D10 was emitted from the `anomaly_groom` fixture with a medium-severity
+  `primitive` phase score of 13.63 (window 76).
+- `timeline.jsonl`, `anomalies.json` and `baseline-model.json` were present and
+  validated from the host side.
+- Content sampling produced timeline content summaries with 16-32 sampled
+  chunks, but the fast fixture completed warmup before the first content tick,
+  so content did not contribute to the baseline in this run.

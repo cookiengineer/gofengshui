@@ -68,7 +68,7 @@ func (a *Agent) Handle(ctx context.Context, conn *transport.Conn, f *proto.Frame
 func methods() []string {
 	return []string{
 		proto.MethodSessionCreate, proto.MethodSessionClose, proto.MethodSessionStatus,
-		proto.MethodEventsSubscribe, proto.MethodHeapQuery, proto.MethodHeapSnapshot, proto.MethodHeapAnalyze, proto.MethodHeapPredict, proto.MethodHeapIntrospect, proto.MethodMapsRefresh,
+		proto.MethodEventsSubscribe, proto.MethodHeapQuery, proto.MethodHeapSnapshot, proto.MethodHeapAnalyze, proto.MethodHeapTimeline, proto.MethodHeapAnomaly, proto.MethodHeapPredict, proto.MethodHeapIntrospect, proto.MethodMapsRefresh,
 		proto.MethodMemRead, proto.MethodMemWrite, proto.MethodRegsGet, proto.MethodStackGet,
 		proto.MethodBreakSet, proto.MethodBreakClear, proto.MethodWatchSet, proto.MethodWatchClear,
 		proto.MethodPause, proto.MethodResume, proto.MethodStep, proto.MethodMark,
@@ -149,7 +149,12 @@ func (a *Agent) Start(p CreateParams) (*Session, error) {
 	}
 	cfg := p.Config
 	if !cfg.Heap && !cfg.Syscalls && !cfg.UAF && !cfg.Stacks && !cfg.Detectors &&
-		!cfg.NoEBPF && !cfg.NoLibc && cfg.GlibcVersion == "" && !cfg.WatchFreed && cfg.SampleStacks == 0 && !cfg.OOM {
+		!cfg.NoEBPF && !cfg.NoLibc && cfg.GlibcVersion == "" && !cfg.WatchFreed &&
+		cfg.SampleStacks == 0 && !cfg.OOM && !cfg.Anomaly && cfg.AnomalyWarmup == 0 &&
+		cfg.AnomalyWindowEvents == 0 && cfg.AnomalyWindowMS == 0 &&
+		cfg.AnomalyThreshold == 0 && cfg.AnomalyHighThreshold == 0 &&
+		cfg.BaselinePath == "" && cfg.BaselineOut == "" && !cfg.ContentSample &&
+		cfg.ContentSampleMS == 0 && cfg.ContentSampleChunks == 0 && cfg.ContentSampleBytes == 0 {
 		cfg = core.DefaultConfig()
 	}
 	s, err := a.createSession(p, cfg)
@@ -305,6 +310,7 @@ func (a *Agent) createSession(p CreateParams, cfg core.Config) (*Session, error)
 	if p.Mode == "attach" && cfg.Backfill {
 		s.backfillHeap()
 	}
+	s.configureAnomaly()
 
 	if cfg.NoEBPF || os.Getenv("GFS_NO_EBPF") == "1" {
 		return s, nil

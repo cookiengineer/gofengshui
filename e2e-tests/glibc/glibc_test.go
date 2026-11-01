@@ -4,6 +4,7 @@ package glibc
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -43,6 +44,31 @@ func TestGlibc(t *testing.T) {
 			verifyGlibcReports(t, reports, true)
 		},
 	})
+}
+
+func TestGlibcAnomaly(t *testing.T) {
+	harness.RequireRoot(t)
+	run := harness.NewRun(t)
+	runCase(t, run, caseSpec{
+		name:       "glibc-anomaly",
+		variant:    "ubuntu-24.04",
+		baseImage:  "ubuntu:24.04",
+		victimArgs: []string{"-test.run", "^TestGlibcAnomaly$"},
+		verify:     verifyGlibcAnomaly,
+	})
+}
+
+func verifyGlibcAnomaly(t *testing.T, reports string) {
+	t.Helper()
+	frames := checks.LoadFrames(t, filepath.Join(reports, "anomaly.events.jsonl"))
+	checks.RequireFinding(t, frames, "D10")
+	checks.RequireTextContains(t, filepath.Join(reports, "anomaly", "report.md"), "**D10**", "D10 report")
+	for _, name := range []string{"timeline.jsonl", "anomalies.json", "baseline-model.json"} {
+		if _, err := os.Stat(filepath.Join(reports, "anomaly", name)); err != nil {
+			t.Fatalf("missing %s: %v", name, err)
+		}
+	}
+	checks.RequireBaselineContent(t, filepath.Join(reports, "anomaly", "baseline-model.json"))
 }
 
 func TestGlibcMatrix(t *testing.T) {

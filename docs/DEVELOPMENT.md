@@ -63,6 +63,39 @@ These exercise ptrace, allocator profile detection, and the CLI. They do not
 produce allocator or syscall events. The unprivileged Go suite also covers a
 live allocation-ID hardware watchpoint (`TestWatchAllocationByIDLive`).
 
+## Anomaly development loop
+
+The anomaly detector can be tuned without root by replaying captured events:
+
+```sh
+./build/gofengshui analyze \
+  --events build/reports/clean/events.jsonl \
+  --out build/reports/clean-anomaly \
+  --window-events 128 \
+  --anomaly-warmup 20
+```
+
+The command writes `timeline.jsonl`, `anomalies.json`,
+`baseline-model.json` and `analysis.json`. `anomalies.json` contains every
+scored window, while D10 emission additionally requires histogram, structural
+or content evidence. Rate/count/reuse drift alone is visible in the score but
+is intentionally not promoted to a finding.
+
+Useful tuning flags:
+
+```text
+--window-events, --window-ms, --max-windows
+--anomaly-warmup, --anomaly-threshold, --anomaly-high-threshold
+--baseline-in, --baseline-out
+--anomaly=false        # timeline only
+```
+
+For live runs, `--anomaly`, `--content-sample`, `--content-sample-ms`,
+`--content-sample-chunks` and `--content-sample-bytes` control the same path.
+Content sampling pauses the target briefly and is skipped while a ROP/hijack
+trace is active. Fast targets can finish warmup before the first content tick,
+which leaves the content baseline empty.
+
 ## Privileged e2e loop
 
 The developer runs:
@@ -74,6 +107,11 @@ sudo -E make e2e
 The suite is a separate Go module in `e2e-tests/`. It must run as root because
 rootful podman is required on hosts with `unprivileged_bpf_disabled=2`, and the
 Go harness invokes `podman` directly without per-command `sudo`.
+
+`make e2e-anomaly` runs only the host-side `TestGlibcAnomaly` case. It limits
+the in-container victim run to `^TestGlibcAnomaly$`, then checks `D10` and the
+timeline/anomaly/baseline exports from the host. Use it while iterating on the
+anomaly pipeline; use `make e2e` before merging.
 
 `make e2e`:
 
@@ -165,7 +203,14 @@ build/e2e/<timestamp>-<pid>/<case>/
       report.md
       summary.json
       rop.json
+      timeline.jsonl
+      anomalies.json
+      baseline-model.json
 ```
+
+The anomaly files are written when the corresponding feature is enabled and
+has data. `anomaly_groom` is the dedicated D10 case; it uses
+`--anomaly-warmup 4 --anomaly-window-events 64 --content-sample`.
 
 The container closes with status 0 only when both the victim subtests and the
 host report assertions pass. `go test -v` streams the victim output; the full
@@ -201,3 +246,12 @@ process-global, and the OOM test imposes a container memory limit.
   `GFS_SKIP_BUILD=1`.
 - Matrix or musl case skipped: the base image is not local. Set
   `GFS_E2E_PULL=1` or pre-pull the image.
+- `no tests to run`: host tests use `//go:build !victim`, while
+  `victim_test.go` is only compiled with `-tags victim`. If the victim subtest
+  name appears only in `victim_test.go`, add or run a host-side wrapper; the
+  anomaly case uses host `TestGlibcAnomaly` plus victim
+  `TestGlibcAnomaly`.
+- Anomaly case fails before D10: inspect `reports/anomaly/timeline.jsonl` and
+  `anomalies.json` for raw scores and components. Check that the baseline was
+  learned before the spray and that the fixture ran long enough for content
+  sampling if content scoring is expected.

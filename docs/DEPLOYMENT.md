@@ -113,6 +113,12 @@ Or run the e2e suite non-interactively as root:
 sudo -E make e2e
 ```
 
+Run only the anomaly case while tuning D10/D11:
+
+```sh
+sudo -E make e2e-anomaly
+```
+
 The Go e2e harness builds the agent and case images, starts one privileged
 container per case, compiles the `//go:build victim` tests with `go test -c`,
 copies them into the container, and executes them with `podman exec`. It also
@@ -139,6 +145,9 @@ Expected results:
 - OOM PoC triggers a bounded cgroup OOM and emits a `D4` kernel-OOM finding;
   the agent uses the OOM tracepoint when exported, otherwise a kprobe fallback
 - size-swap PoC emits a `D9` size-mismatch finding
+- the `anomaly_groom` fixture emits `D10` from a primitive-phase timeline
+  window and exports `timeline.jsonl`, `anomalies.json` and
+  `baseline-model.json`
 - realloc churn runs clean and exercises the realloc-aware timeline
 - attach backfill recovers chunks from both the main heap and thread arenas
 - dlopen plugin is resolved and allocator probes refresh via `maps.refresh`
@@ -266,3 +275,12 @@ mode 0600 and the agent does not open a network listener by default.
   reads `NSpid` from `/proc/<pid>/status`.
 - Target libraries are resolved through `/proc/<pid>/root/...`.
 - Host `sysctl` changes are not required for the provided toolchain commands.
+- Anomaly detection is opt-in and workload-dependent. Without a suitable
+  warmup or stored baseline, benign phase changes can produce medium scores;
+  D10 is only emitted when composition, content or structural evidence is
+  present.
+- Stored baselines are ignored when their executable/profile key does not
+  match the current target.
+- Content sampling briefly pauses the target and is skipped during active
+  ROP/hijack tracing. Very short-lived targets may not collect content during
+  warmup, leaving the content baseline empty.

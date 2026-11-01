@@ -36,7 +36,13 @@ Rules:
   "pause":false,
   "follow":false,
   "config":{"heap":true,"syscalls":true,"uaf":true,"stacks":true,"detectors":true,
-            "no_libc":false,"no_ebpf":false,"glibc_version":"","watch_freed":false,"sample_stacks":0,"oom":false}
+            "no_libc":false,"no_ebpf":false,"glibc_version":"","watch_freed":false,
+            "sample_stacks":0,"oom":false,"anomaly":false,"anomaly_warmup":20,
+            "anomaly_window_events":1000,"anomaly_window_ms":250,
+            "anomaly_threshold":8,"anomaly_high_threshold":16,
+            "baseline_path":"","baseline_out":"",
+            "content_sample":false,"content_sample_ms":1000,
+            "content_sample_chunks":64,"content_sample_bytes":256}
 }}
 ```
 
@@ -92,9 +98,13 @@ module/symbol/offset where resolvable).
 {"method":"heap.query","params":{"session":"s1","id":12}}
 {"method":"heap.query","params":{"session":"s1","live":true,"limit":100}}
 {"method":"heap.analyze","params":{"session":"s1"}}
+{"method":"heap.timeline","params":{"session":"s1","since":0,"limit":16}}
+{"method":"heap.anomaly","params":{"session":"s1"}}
+{"method":"heap.anomaly","params":{"session":"s1","reset":true}}
 {"method":"heap.predict","params":{"session":"s1","tid":7,"size":24,"limit":16,"observe":true}}
 {"method":"heap.introspect","params":{"session":"s1","tid":0,"pause":true}}
 {"method":"heap.baseline","params":{"session":"s1","name":"after-setup","path":"/tmp/base.json"}}
+{"method":"heap.baseline","params":{"session":"s1","mode":"learn","name":"learned","path":"/tmp/baseline-model.json"}}
 {"method":"heap.diff","params":{"session":"s1","name":"after-setup"}}
 {"method":"heap.recipe","params":{"session":"s1","tid":7,"size":24,"count":8}}
 {"method":"heap.snapshot","params":{"session":"s1"}}
@@ -106,6 +116,38 @@ with the detected glibc version and allocator capabilities, plus an `analysis`
 object with size-class histograms, largest live/freed chunks, address gaps and
 address-reuse counts. Set `config.glibc_version` (or CLI `--glibc-version`) to
 override detection.
+
+`heap.timeline` returns bounded allocation-history windows. Each window has
+`id`, `trigger` (`events`, `time`, `flush` or `current`), event sequence range,
+wall-clock range, event/alloc/free/realloc counters, live/freed class
+histograms with byte and count shares, per-thread summaries, call-site
+summaries, address-reuse counts and per-second rates. `since` filters by window
+ID; `limit` returns the newest matching windows. The current partial window is
+included with `trigger: "current"`.
+
+`heap.anomaly` reports whether the timeline anomaly detector is enabled, the
+current warmup progress, the last score, recent scores, the latest sampled
+content summary and the learned or loaded baseline. Set `reset: true` to
+discard the baseline and restart warmup. Anomaly detection is enabled by
+`config.anomaly: true` or by supplying `config.baseline_path`. D10 findings are
+emitted when a window score crosses the medium threshold; `cusum` and
+`change_point` track sustained deviations. D10 requires histogram, content or
+structural evidence; rate/count/reuse drift alone is retained in the score and
+`anomalies.json` but is not emitted as a finding. Scores carry `phase`
+(`normal`/`suspect`/`primitive`/`control`) and `phase_change`; D11 is emitted
+when a suspicious phase is correlated with a control-flow finding such as D6.
+
+`config.content_sample: true` enables periodic chunk-content sampling. The
+sampler pauses the target, reads a stratified sample of live and freed chunks,
+resumes only threads it stopped, and attaches aggregate entropy, printable,
+pointer, zero and repeated-qword metrics to the current timeline window. It is
+skipped while a ROP/hijack trace is active.
+
+`heap.baseline` with `mode: "learn"` builds a robust baseline model from the
+completed timeline windows and installs it in the anomaly tracker. The optional
+`path` writes the model as JSON. A stored model is accepted only when its
+executable/profile key matches the current target; otherwise the session keeps
+using warmup.
 
 `heap.predict` returns likely next allocation addresses for a requested size,
 using the detected profile for tcache size/count, safe-linking and bin limits.
@@ -260,8 +302,12 @@ hit: it emits no `sink` event, sets no last-sink result, and yields
 Exports:
 
 - `events.jsonl`
-- `heap.json` (including the last `heap.introspect` snapshot when one was
-  taken)
+- `timeline.jsonl` (all completed timeline windows plus the current window)
+- `anomalies.json` when anomaly scores were recorded
+- `baseline-model.json` when a baseline was learned or loaded; a configured
+  `baseline_out` path is also written when the session closes
+- `heap.json` (including the timeline, anomaly scores, content summary,
+  baseline model and the last `heap.introspect` snapshot when one was taken)
 - `rop.json` when a trace exists
 - `summary.json`
 - `report.md`
@@ -282,6 +328,32 @@ gofengshui ctl --socket /run/gofengshui.sock \
 `--until` accepts `finding:D2`, `finding`, `sink`, `rop`, `marker:<label>` or
 `stop`. `--max-events N` limits the stream. `--close` sends `session.close`
 with `kill:true` before exiting. This is the normal CI/remote driver.
+
+Offline replay builds the same timeline from an exported event stream without
+attaching to a target:
+
+```sh
+gofengshui analyze --events events.jsonl --out analysis/
+```
+
+It writes `timeline.jsonl` and `analysis.json` and prints the event/window
+counts. Window sizing is controlled with `--window-events`, `--window-ms` and
+`--max-windows`.
+
+Anomaly detection is opt-in:
+
+```sh
+gofengshui run --anomaly --baseline-out baseline.json --report reports/case -- ./poc
+gofengshui run --baseline-in baseline.json --report reports/case -- ./poc
+```
+
+Useful flags are `--anomaly-warmup`, `--anomaly-window-events`,
+`--anomaly-window-ms`, `--anomaly-threshold` and
+`--anomaly-high-threshold`.
+
+Content sampling is enabled with `--content-sample`; tune it with
+`--content-sample-ms`, `--content-sample-chunks` and
+`--content-sample-bytes`.
 
 ## Error codes
 

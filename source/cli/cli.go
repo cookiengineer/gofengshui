@@ -11,15 +11,19 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"gofengshui/agent"
+	"gofengshui/analyze"
 	"gofengshui/core"
 	"gofengshui/debugger"
 	"gofengshui/detect"
+	"gofengshui/export"
+	"gofengshui/heap"
 	"gofengshui/proto"
 	"gofengshui/transport"
 )
@@ -60,6 +64,8 @@ func Main(args []string) int {
 		err = cmdStdio()
 	case "ctl":
 		err = cmdCtl(args[1:])
+	case "analyze":
+		err = cmdAnalyze(args[1:])
 	case "help", "--help", "-h":
 		usage()
 		return 0
@@ -85,6 +91,8 @@ Usage:
   gofengshui agent --socket /run/gofengshui.sock
   gofengshui stdio
   gofengshui ctl --socket <path> --method <method> [--params JSON] [--events]
+  gofengshui analyze --events <events.jsonl> [--out DIR] [--window-events N]
+                         [--baseline-in FILE] [--baseline-out FILE]
 
 Flags for run/attach:
   --pid N            attach to N instead of spawning
@@ -105,6 +113,18 @@ Flags for run/attach:
   --watch-freed      watch recently freed chunks for direct UAF writes
   --sample-stacks N  capture every Nth user stack (power of two)
   --oom              enable kernel OOM tracepoint/kprobe capture
+  --anomaly          enable heap timeline anomaly detection (warmup baseline)
+  --anomaly-warmup   timeline windows to learn before scoring (default 20)
+  --anomaly-window-events  timeline events per window
+  --anomaly-window-ms      timeline duration per window
+  --anomaly-threshold      medium-severity anomaly score
+  --anomaly-high-threshold high-severity anomaly score
+  --baseline-in PATH       load a stored baseline model
+  --baseline-out PATH      write the learned baseline model on export
+  --content-sample         sample heap chunk contents periodically
+  --content-sample-ms      content sampling interval (default 1000)
+  --content-sample-chunks  chunks per content sample (default 64)
+  --content-sample-bytes   bytes per sampled chunk (default 256)
   --expect-findings  comma-separated detector IDs that must be present
   --expect-no-findings  fail if any finding is produced
   --expect-regs      validate sink registers (e.g. rdi=0x4141)
@@ -132,6 +152,18 @@ func configFlags(fs *flag.FlagSet) (*core.Config, *bool, *bool, *bool, *string, 
 		return nil
 	})
 	fs.BoolVar(&cfg.OOM, "oom", false, "enable kernel OOM tracepoint/kprobe capture")
+	fs.BoolVar(&cfg.Anomaly, "anomaly", false, "enable heap timeline anomaly detection")
+	fs.IntVar(&cfg.AnomalyWarmup, "anomaly-warmup", 0, "timeline windows used for baseline learning")
+	fs.IntVar(&cfg.AnomalyWindowEvents, "anomaly-window-events", 0, "events per timeline window")
+	fs.IntVar(&cfg.AnomalyWindowMS, "anomaly-window-ms", 0, "timeline window duration in milliseconds")
+	fs.Float64Var(&cfg.AnomalyThreshold, "anomaly-threshold", 0, "medium-severity anomaly score threshold")
+	fs.Float64Var(&cfg.AnomalyHighThreshold, "anomaly-high-threshold", 0, "high-severity anomaly score threshold")
+	fs.StringVar(&cfg.BaselinePath, "baseline-in", "", "load a stored baseline model")
+	fs.StringVar(&cfg.BaselineOut, "baseline-out", "", "write the learned baseline model on export")
+	fs.BoolVar(&cfg.ContentSample, "content-sample", false, "sample heap chunk contents periodically")
+	fs.IntVar(&cfg.ContentSampleMS, "content-sample-ms", 0, "content sampling interval in milliseconds")
+	fs.IntVar(&cfg.ContentSampleChunks, "content-sample-chunks", 0, "chunks per content sample")
+	fs.IntVar(&cfg.ContentSampleBytes, "content-sample-bytes", 0, "bytes per sampled chunk")
 	pause := fs.Bool("pause", false, "pause before continuing the target")
 	jsonl := fs.Bool("jsonl", false, "serve JSONL protocol on stdin/stdout")
 	follow := fs.Bool("follow", false, "follow clone/fork/vfork")
@@ -250,6 +282,126 @@ func cmdStdio() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	return transport.ServeStdio(ctx, agent.New())
+}
+
+func cmdAnalyze(args []string) error {
+	fs := flag.NewFlagSet("analyze", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	events := fs.String("events", "", "events.jsonl path")
+	out := fs.String("out", "", "output directory")
+	windowEvents := fs.Int("window-events", 1000, "events per window")
+	windowMS := fs.Int("window-ms", 250, "window duration in milliseconds")
+	maxWindows := fs.Int("max-windows", 4096, "timeline ring size")
+	anomaly := fs.Bool("anomaly", true, "learn/score anomaly windows")
+	baselineIn := fs.String("baseline-in", "", "load a stored baseline model")
+	baselineOut := fs.String("baseline-out", "", "write the learned baseline model")
+	warmup := fs.Int("anomaly-warmup", 20, "windows used for baseline learning")
+	threshold := fs.Float64("anomaly-threshold", 0, "medium-severity score threshold")
+	high := fs.Float64("anomaly-high-threshold", 0, "high-severity score threshold")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *events == "" {
+		return errors.New("--events is required")
+	}
+	cfg := heap.TimelineConfig{
+		WindowEvents: *windowEvents,
+		WindowMS:     *windowMS,
+		MaxWindows:   *maxWindows,
+	}
+	tl, count, err := analyze.TimelineFile(*events, cfg)
+	if err != nil {
+		return err
+	}
+	windows := tl.Snapshot()
+
+	var baseline *heap.BaselineModel
+	var scores []heap.AnomalyScore
+	scoreStart := 0
+	if *anomaly {
+		scoreCfg := heap.DefaultAnomalyConfig()
+		if *threshold > 0 {
+			scoreCfg.Threshold = *threshold
+		}
+		if *high > 0 {
+			scoreCfg.HighThreshold = *high
+		}
+		if *baselineIn != "" {
+			b, err := heap.LoadBaseline(*baselineIn)
+			if err != nil {
+				return err
+			}
+			baseline = &b
+		} else if *warmup > 0 && len(windows) > *warmup {
+			b := heap.BuildBaseline("offline", "offline", heap.DefaultProfile(), windows[:*warmup])
+			baseline = &b
+			scoreStart = *warmup
+		}
+		if baseline != nil {
+			for _, w := range windows[scoreStart:] {
+				scores = append(scores, heap.ScoreWindow(w, *baseline, scoreCfg))
+			}
+			if *baselineOut != "" {
+				if err := heap.SaveBaseline(*baselineOut, *baseline); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	if *out != "" {
+		if err := os.MkdirAll(*out, 0o755); err != nil {
+			return err
+		}
+		if err := export.JSONLRecords(filepath.Join(*out, "timeline.jsonl"), windows); err != nil {
+			return err
+		}
+		if len(scores) > 0 {
+			if err := export.JSON(filepath.Join(*out, "anomalies.json"), scores); err != nil {
+				return err
+			}
+		}
+		if baseline != nil {
+			if err := export.JSON(filepath.Join(*out, "baseline-model.json"), baseline); err != nil {
+				return err
+			}
+		}
+		if err := export.JSON(filepath.Join(*out, "analysis.json"), map[string]any{
+			"events": count, "windows": windows, "config": cfg,
+			"anomalies": scores, "baseline_model": baseline,
+		}); err != nil {
+			return err
+		}
+	}
+	maxScore := 0.0
+	severity := "info"
+	findings := 0
+	maxFindingScore := 0.0
+	maxFindingSeverity := "info"
+	for _, score := range scores {
+		if score.Score > maxScore {
+			maxScore = score.Score
+			severity = score.Severity
+		}
+		if detect.ShouldEmitD10(score) {
+			findings++
+			if score.Score > maxFindingScore {
+				maxFindingScore = score.Score
+				maxFindingSeverity = score.Severity
+			}
+		}
+	}
+	b, err := json.MarshalIndent(map[string]any{
+		"events": count, "windows": len(windows), "config": cfg,
+		"anomaly_scores": len(scores), "max_score": maxScore, "max_severity": severity,
+		"findings": findings, "max_finding_score": maxFindingScore,
+		"max_finding_severity": maxFindingSeverity,
+	}, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(b))
+	return nil
 }
 
 func cmdCtl(args []string) error {

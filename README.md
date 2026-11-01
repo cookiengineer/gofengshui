@@ -10,6 +10,9 @@ Currently targets dynamically linked glibc C/C++ programs on `x86_64`.
 
 - eBPF allocator and syscall tracing with an embedded BPF object
 - Heap timeline, size-class analysis, address gaps, reuse tracking
+- Time-series allocation histograms with a bounded offline/live window feed
+- Learned or stored baseline anomaly detection (D10) and phase correlation
+  (D11), plus sampled chunk-content metrics
 - glibc profiles 2.26–2.44, including the 2.42 tcache layout and 2.44
   no-fastbin/16-slot behavior
 - Live tcache and arena introspection from stripped libc (`heap.introspect`)
@@ -24,6 +27,8 @@ Currently targets dynamically linked glibc C/C++ programs on `x86_64`.
   - D7 tcache link poisoning/safe-linking anomalies
   - D8 chunk/next-chunk metadata corruption
   - D9 allocated-vs-free chunk size mismatch
+  - D10 heap timeline anomaly
+  - D11 exploit-phase correlation
 - ptrace breakpoints, watchpoints, single-step, registers, and memory access
 - Sink/hijack registration and ROP chain validation
 - C++ `new`/`delete` labelling, dlopen probe reattachment
@@ -80,6 +85,16 @@ compiles the victim tests with `go test -c -tags victim`, copies the binary into
 the container, executes it, and then validates the exported reports from the
 host. Running `make e2e` without `sudo` exits at the root guard and does not
 create a new log.
+
+Run only the anomaly case while iterating on D10/D11 or content sampling:
+
+```sh
+sudo -E make e2e-anomaly
+```
+
+That case runs the `anomaly_groom` fixture and verifies `D10`, `timeline.jsonl`,
+`anomalies.json` and `baseline-model.json`. The full suite remains the required
+regression before merging.
 
 The glibc base-image matrix runs as part of the suite. Allow pulling missing
 base images with:
@@ -149,7 +164,29 @@ sudo ./build/gofengshui validate \
   --report build/reports/rop -- ./poc
 ```
 
-Other commands: `attach`, `agent`, `stdio`, `ctl`, `version`.
+Other commands: `attach`, `agent`, `stdio`, `ctl`, `analyze`, `version`.
+
+Offline timeline analysis and anomaly calibration:
+
+```sh
+./build/gofengshui analyze --events build/reports/case/events.jsonl \
+  --out build/reports/case-analysis \
+  --anomaly-warmup 20
+```
+
+This writes `timeline.jsonl`, `anomalies.json`, `baseline-model.json` and
+`analysis.json`. Use `--anomaly=false` for timeline-only replay, or
+`--baseline-in` to score against a stored baseline.
+
+Opt-in live anomaly detection:
+
+```sh
+sudo ./build/gofengshui run --anomaly --baseline-out build/baseline.json \
+  --report build/reports/case -- ./poc
+```
+
+Add `--content-sample` to sample chunk contents and `--baseline-in` to reuse a
+previously learned baseline.
 
 ## Requirements
 
@@ -157,6 +194,14 @@ Other commands: `attach`, `agent`, `stdio`, `ctl`, `version`.
 - `CAP_BPF`, `CAP_PERFMON`, `CAP_SYS_PTRACE` (usually `CAP_SYS_ADMIN`)
 - `seccomp=unconfined` in containers
 - `/sys/kernel/btf/vmlinux` visible for kernel BTF
+
+## Current Status
+
+The anomaly-detection phases 0-4 are implemented. Phase 5 validation is still
+in progress: the anomaly e2e case passes, but the full privileged regression,
+benign false-positive matrix, exploit detection-latency matrix and overhead
+measurements are still pending. See `docs/TASKS.md` for the task-level status
+and `HANDOVER.md` for the next-session checklist.
 
 ## Security
 

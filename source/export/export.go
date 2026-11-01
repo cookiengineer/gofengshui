@@ -40,13 +40,30 @@ func JSONL(path string, frames []*proto.Frame) error {
 	return w.Flush()
 }
 
+// JSONLRecords writes one arbitrary JSON value per line.
+func JSONLRecords[T any](path string, values []T) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	w := bufio.NewWriter(f)
+	enc := json.NewEncoder(w)
+	for _, value := range values {
+		if err := enc.Encode(value); err != nil {
+			return err
+		}
+	}
+	return w.Flush()
+}
+
 // ROPReport is kept generic to avoid an import cycle with the agent package.
 type ROPReport interface {
 	IsVerified() bool
 }
 
 // Report writes a human-readable summary.
-func Report(path, session string, target core.Target, profile heap.Profile, stats heap.Stats, sink any, rop any, findings []core.Finding) error {
+func Report(path, session string, target core.Target, profile heap.Profile, stats heap.Stats, sink any, rop any, findings []core.Finding, anomalies []heap.AnomalyScore) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Go Heap FengShui report\n\n")
 	fmt.Fprintf(&b, "- Session: `%s`\n", session)
@@ -65,6 +82,20 @@ func Report(path, session string, target core.Target, profile heap.Profile, stat
 	} else {
 		for _, f := range findings {
 			fmt.Fprintf(&b, "- **%s** (%s): %s\n", f.ID, f.Severity, f.Message)
+		}
+		fmt.Fprintf(&b, "\n")
+	}
+
+	fmt.Fprintf(&b, "## Heap timeline anomalies\n\n")
+	if len(anomalies) == 0 {
+		fmt.Fprintf(&b, "No timeline anomalies recorded.\n\n")
+	} else {
+		for _, a := range anomalies {
+			fmt.Fprintf(&b, "- Window %d: score %.2f (%s)", a.WindowID, a.Score, a.Severity)
+			if len(a.Evidence) > 0 {
+				fmt.Fprintf(&b, " - %s", strings.Join(a.Evidence, "; "))
+			}
+			fmt.Fprintf(&b, "\n")
 		}
 		fmt.Fprintf(&b, "\n")
 	}

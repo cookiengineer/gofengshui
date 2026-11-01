@@ -209,6 +209,30 @@ type Config struct {
 	SampleStacks uint32 `json:"sample_stacks,omitempty"`
 	// OOM enables kernel OOM tracepoint/kprobe capture.
 	OOM bool `json:"oom,omitempty"`
+	// Anomaly enables the heap timeline anomaly detector.
+	Anomaly bool `json:"anomaly,omitempty"`
+	// AnomalyWarmup is the number of timeline windows used for learning.
+	AnomalyWarmup int `json:"anomaly_warmup,omitempty"`
+	// AnomalyWindowEvents overrides the timeline event window size.
+	AnomalyWindowEvents int `json:"anomaly_window_events,omitempty"`
+	// AnomalyWindowMS overrides the timeline time window in milliseconds.
+	AnomalyWindowMS int `json:"anomaly_window_ms,omitempty"`
+	// AnomalyThreshold is the medium-severity score threshold.
+	AnomalyThreshold float64 `json:"anomaly_threshold,omitempty"`
+	// AnomalyHighThreshold is the high-severity score threshold.
+	AnomalyHighThreshold float64 `json:"anomaly_high_threshold,omitempty"`
+	// BaselinePath loads a stored baseline model.
+	BaselinePath string `json:"baseline_path,omitempty"`
+	// BaselineOut writes a learned baseline model on export.
+	BaselineOut string `json:"baseline_out,omitempty"`
+	// ContentSample enables periodic sampled chunk-content analysis.
+	ContentSample bool `json:"content_sample,omitempty"`
+	// ContentSampleMS is the content sampling interval in milliseconds.
+	ContentSampleMS int `json:"content_sample_ms,omitempty"`
+	// ContentSampleChunks bounds the number of chunks per sample.
+	ContentSampleChunks int `json:"content_sample_chunks,omitempty"`
+	// ContentSampleBytes bounds the bytes read from each chunk.
+	ContentSampleBytes int `json:"content_sample_bytes,omitempty"`
 }
 
 func DefaultConfig() Config {

@@ -34,6 +34,8 @@ const (
 	MethodHeapBaseline    = "heap.baseline"
 	MethodHeapDiff        = "heap.diff"
 	MethodHeapRecipe      = "heap.recipe"
+	MethodHeapTimeline    = "heap.timeline"
+	MethodHeapAnomaly     = "heap.anomaly"
 	MethodMapsRefresh     = "maps.refresh"
 	MethodMemRead         = "mem.read"
 	MethodMemWrite        = "mem.write"

@@ -1,375 +1,328 @@
-# Go Heap FengShui — Implementation Plan
+# Go Heap FengShui — Plan
 
 ## Goal
 
-Provide a standalone, `CGO_ENABLED=0` binary and Go library for heap feng shui
-and exploit validation on glibc CTF workloads. The agent combines eBPF
-observation with ptrace control:
+Build a target-process heap anomaly detector on top of the existing eBPF and
+ptrace foundation. The detector learns what normal allocation behavior looks
+like for a workload, watches allocation histograms and sampled chunk content
+over time, and correlates deviations with the structural heap detectors.
 
-- eBPF: transparent allocator/syscall tracing, heap timeline, UAF/overflow
-  candidate detection.
-- ptrace: exact pause/resume, breakpoints, step, hardware watchpoints, register
-  and memory access.
-- ROP validation: registered sink symbols, hijack watchpoints, single-step
-  chain tracing, gadget classification, CI assertions.
+This is behavioral exploit detection, not vulnerability discovery. It detects
+activity consistent with active heap exploitation:
 
-The first target is dynamically linked glibc C/C++ on x86_64. Modern Linux
-kernels with BTF, uprobes, ringbuf and `CAP_BPF`/`CAP_PERFMON`/
-`CAP_SYS_PTRACE` are assumed.
+- grooming and spray patterns
+- repeated address reuse and same-size free/alloc cycles
+- tcache saturation and poisoning-like behavior
+- allocator metadata corruption
+- control-flow hijack and crash sequences
 
-## Repository Layout
+The target scope is one traced process (including followed threads and
+fork/exec children). Host-wide monitoring is out of scope for this plan.
 
-```
-Makefile
-bpf/                     eBPF C sources and headers
-build/                   all build artefacts (BPF objects, binary, reports)
-docs/                    plan, tasks, protocol, deployment, development workflow
-source/                  all Go and test-harness source code
-  cmd/gofengshui/        command-line entry point
-  agent/                 session manager and request handling
-  cli/                   command dispatch
-  core/                  shared domain types
-  debugger/              ptrace engine (break/watch/step/regs/mem)
-  detect/                detector rules
-  disasm/                x86 gadget classification
-  ebpf/                  loader, attach logic, ringbuf decoding
-  export/                JSONL, report and ROP export
-  heap/                  heap model, interval checks, glibc adapter
-  proto/                 versioned JSONL protocol
-  symbols/               ELF/maps resolution
-  testdata/              C harnesses and PoCs
-  tools/bpfgen/          BPF object -> Go byte-slice generator
-  transport/             stdio and unix-socket transports
-toolchain/               Go development commands for privileged container workflows
-e2e-tests/               containerized end-to-end cases and Go harness
-  glibc/                 glibc Containerfile, host and victim tests
-  musl/                  Alpine/musl Containerfile, host and victim tests
-  internal/harness/      root guard, podman lifecycle, build and logging
-  internal/checks/       JSON/JSONL/report assertions
-  internal/agentrun/     agent, fixture and protocol helpers
-```
+## Existing Foundation
 
-No `internal/` directory is used; every package is importable as a library.
+The repository already provides the event pipeline and structural detectors:
+
+- eBPF allocator and syscall tracing, ringbuf decoding, stack sampling
+- `core.Event` and `core.Allocation` domain types
+- `heap.Model` with allocation timeline, tombstones, reuse tracking and
+  glibc profiles
+- structural detectors D1–D9
+- point-in-time heap analysis, baseline snapshots, diffs and recipes
+- live tcache/arena introspection and free-list prediction
+- ptrace pause/resume, breakpoints, watchpoints, registers and memory reads
+- session protocol, JSONL export and report generation
+
+The new work is the time-series layer, content sampling, baseline learning,
+anomaly scoring and phase correlation.
 
 ## Architecture
 
+```text
+eBPF / ptrace events
+        |
+        v
+heap.Model (existing) ---> detect.Engine (existing D1-D9)
+        |                         |
+        +--> Timeline collector --+--> Anomaly scorer --> D10/D11 findings
+                 |                                       |
+                 +--> content sampler (pause + ReadMemory)
+                 |
+                 +--> protocol / export / report
 ```
-Host CLI / CI
-  | JSONL over stdio or unix socket
-  v
-agent
-  |-- session manager, protocol, assertions
-  |-- heap model + detectors + ROP validator
-  |-- eBPF tracer: uprobes + raw syscalls -> ringbuf
-  |-- ptrace tracer: stop/step/watch/regs/mem
-  v
-target process
-```
 
-### eBPF hooks
+The existing `Analyze()` snapshot semantics stay unchanged. The timeline is a
+separate, bounded time-series layer.
 
-| Layer | Hook | Data |
-|---|---|---|
-| allocator | uprobe/uretprobe `malloc`, `calloc`, `realloc`, `free` | requested size, pointer, header size |
-| allocator | `aligned_alloc`, `posix_memalign`, C++ new/delete | when symbols exist |
-| syscalls | raw `sys_enter` / `sys_exit` | mmap, munmap, brk, mremap, read, write, openat, execve, sendfile, splice |
-| kernel | `oom_kill_process` raw tracepoint or kprobe (`--oom`) | kernel OOM kill events (D4) |
-| stacks | `bpf_get_stackid(BPF_F_USER_STACK)` | allocation call site |
+## Timeline Collector
 
-BPF maps:
+The collector is fed from the live session pump and from offline event replay.
+It must be incremental: no full heap scan per event.
 
-- `config`: cgroup/PID filter and detector toggles.
-- `pending`: per-TID entry/return pairing.
-- `pending_sys`: per-TID syscall entry/return pairing.
-- `allocs`: live allocation records.
-- `tombstones`: freed ranges for fast checks.
-- `stacks`: user stack IDs.
-- `stats`: ringbuf drops and counters.
-- `events`: ringbuf.
+Configuration defaults:
 
-Kernel-side allocation size measurement:
+- close a window after 1,000 events or 250 ms, whichever comes first
+- retain 4,096 completed windows
+- update counters in O(1) per event
 
-- Read the glibc chunk header at `ptr-8` with `bpf_probe_read_user`.
-- Mask low flag bits.
-- Record both requested and actual chunk size.
-- Fall back to requested size if the header is implausible.
+Each window records:
 
-### ptrace rules
+- exact chunk-size classes up to `0x410`, then log2 buckets
+- live/freed counts, bytes and normalized shares per class
+- alloc/free/realloc/churn rates per second
+- per-thread histograms and call-site (`StackID`) allocation counts
+- address reuse counts, including same-address/same-size cycles
+- mmap/brk/munmap activity and allocation failures
+- tcache occupancy when cached introspection is available
+- structural finding counts and BPF drop/sampling confidence
 
-- One tracer goroutine locked to one OS thread owns `wait4` and all ptrace
-  calls.
-- Spawn: `PTRACE_TRACEME`, `PTRACE_O_TRACECLONE/FORK/VFORK/EXEC/EXIT`,
-  `PTRACE_O_EXITKILL`.
-- Attach: `PTRACE_SEIZE` + `PTRACE_INTERRUPT`.
-- Hardware execution breakpoints/watchpoints use DR0–DR3 via
-  `PTRACE_POKEUSER` offset 848 (`struct user.u_debugreg[0]`, x86_64).
-- Never place a software `int3` on an address with an active uprobe.
-- Software breakpoints save the original byte, restore it for stepping, and
-  reinsert afterwards.
-- Watchpoints trigger on read, write, read/write or execute; sizes 1/2/4/8.
-- v1 traces one selected thread precisely and suspends other threads
-  best-effort. Full per-thread debug-register inheritance is M3.
+Realloc semantics mirror the heap model: in-place reallocs preserve the live
+chunk and adjust its class; moving reallocs free the old chunk and allocate the
+new one.
 
-### Heap model
+## Sampled Content Analysis
+
+Content sampling is optional and bounded. It never runs on every event.
+
+Defaults:
+
+- at most once per second, or every N windows
+- skip while a ROP/hijack trace is active
+- pause with the same safe pattern used by allocator introspection
+- resume only threads the sampler stopped
+- budget: 64 chunks x 256 bytes per checkpoint
+
+Sample selection is stratified by size class and prioritizes anomalous classes,
+recently freed chunks and realloc candidates.
+
+Aggregate metrics only, by default:
+
+- byte-value Shannon entropy
+- printable-byte ratio
+- pointer-like qword density against known mappings
+- zero-byte ratio
+- most-common-qword / repeated-qword frequency
+
+Raw chunk bytes are not exported unless an explicit debug option is added
+later.
+
+## Baseline Model
+
+The baseline supports both per-run warmup and stored benign baselines.
+
+- warmup: learn after the first N windows (default 20)
+- optional restart after a phase `mark`
+- stored baseline keyed by executable hash + libc profile + optional phase
+- advisory only when the executable, libc profile or thread shape differs
+
+Use robust statistics:
+
+- median + MAD per class, rate metric and content metric
+- EWMA/EWMV for gradual drift
+- per-class quantile bands
+- Dirichlet/Laplace smoothing for low-count classes
+- explicit confidence reduction for ringbuf drops or sparse stack sampling
+
+## Anomaly Scoring
+
+For each window compare:
+
+- short window vs previous window: sudden grooming/spray
+- short window vs long EWMA baseline: sustained change
+- current window vs stored baseline: abnormal workload behavior
+- phase vs previous phase: marker-aligned comparison
+
+Signals:
+
+- Jensen-Shannon divergence on normalized class histograms
+- Wasserstein distance on ordered size buckets
+- robust z-scores for alloc/free/churn/reuse rates
+- Shannon entropy of the class distribution
+- tcache depth oscillation and saturation
+- content entropy/pointer-density deviations
+- D7/D8/D9 findings as structural evidence
+
+Score composition:
 
 ```text
-Allocation {
-  id, addr, req_size, chunk_size, allocator, state,
-  tid, stack_id, ts_alloc, ts_free, generation, mmap_backed
-}
+score = histogram_divergence
+      + rate_deviation
+      + concentration_anomaly
+      + reuse_anomaly
+      + tcache_pressure
+      + content_anomaly
+      + structural_signal_bonus
 ```
 
-- BPF performs exact-address checks.
-- Go owns the interval tree and definitive range checks.
-- Freed ranges are tombstones. Exact-start checks happen in BPF; range checks
-  happen in Go on syscall events.
-- D1 double/invalid free.
-- D2 UAF read/write from syscall buffers, including `openat`, `execve`,
-  `sendfile` and `splice` offset/path pointers, plus optional auto-watchpoints
-  on recently freed chunks for direct (non-syscall) writes.
-- D3 heap overflow from access range versus allocation end.
-- D4 OOM/allocation failure (malloc NULL, mmap/mremap errno).
-- D5 sink/hijack hit (ptrace).
-- D6 crash classification: fatal signal, RIP symbolization,
-  controlled-RIP candidate flag, `PTRACE_GETSIGINFO` fault address/access
-  classification and an executable stack-window summary.
-- Heap analysis: size-class histogram, largest live/freed chunks, address
-  gaps and address reuse.
-- Allocator profiles: detect glibc 2.26–2.44 behavior from the target libc
-  (`tcache`, safe-linking, tcache key, bin limits) with an explicit override.
-  Glibc 2.42 uses the `num_slots[76]` tcache layout; glibc 2.44 raises the
-  fill count to 16 and removes fastbins.
-- Direct allocator introspection: locate stripped-libc `tcache` TLS slots via
-  `R_X86_64_TPOFF64` relocations and thread `fs_base`, validate both tcache
-  layouts, walk safe-linked bins, and scan main/thread arenas. Live tcache
-  state is preferred over the event model when available.
-- Allocation prediction: profile-driven glibc request2size, per-thread tcache
-  LIFO (7 frees through 2.43, 16 from 2.44), plus fastbin LIFO where fastbins
-  exist and smallbin FIFO ordering keyed by arena. Arena regions are refreshed
-  from maps as threads create heaps; live tcache bins override the model when
-  available.
-- Realloc-aware timeline: moving reallocs free the old chunk; in-place reallocs
-  preserve the allocation ID.
-- Baseline/diff snapshots and advisory spray recipes (`heap.baseline`,
-  `heap.diff`, `heap.recipe`) with JSON export.
-- Attach-time main-heap and thread-arena backfill, dlopen resolver/allocator
-  refresh, stdio protocol validation, software breakpoints, allocation-ID
-  watch, and CLI CI expectations all verified in the privileged suite.
-- D7 tcache free-list link anomalies: the BPF allocator return probe records a
-  popped chunk's encoded `next` word; Go decodes safe-linking and flags links
-  that leave the tracked free list or mapped memory, self-loops, links to live
-  allocations, and cross-size-class links.
-- D8 chunk metadata corruption: BPF records the chunk and next-chunk size words
-  at free() entry; Go validates alignment, bounds and PREV_INUSE.
-- D9 size-field mismatch: the free-time header size is compared with the size
-  recorded at allocation, catching valid-looking size overwrites.
+Change-point detection (CUSUM or Bayesian online change-point) marks the start
+of a suspicious phase.
 
-### Sink and ROP validation
+## Phase Correlation
 
-Host registers a sink by symbol, module+offset, or raw address. The harness
-exports `gfs_sink`.
-
-Preferred chain capture:
-
-1. Register `hijack.watch` on the saved-RIP slot or function-pointer slot.
-2. Hardware watchpoint fires when the vulnerable `ret`/indirect call reads it.
-3. Capture hijack point and single-step until the sink breakpoint.
-4. Record every control transfer, stack pointer and register state.
-5. Emit `rop.json` containing the executed chain, disassembled gadgets and
-   validation result.
-
-Fallback: `rop.arm {start, chain_base, sink, max_steps}`.
-
-Validation:
-
-- Sink hit at registered address.
-- Argument registers match assertions.
-- The trace must leave the start address (start and sink may not be equal) and
-  execute at least one control-transfer gadget before the sink.
-- Executable chain entries in the first `start` → `sink` segment must decode as
-  valid gadgets; when a chain base is supplied, the segment must contain both
-  the start and sink addresses. Words outside the segment are treated as data
-  and ignored.
-- Gadgets are classified by disassembly.
-- A legitimate sink call without a hijack path is not accepted.
-- A signal, exit, or max-step stop before the sink is not verified and does not
-  produce a sink hit.
-
-Without a hijack slot or a chain base/start, only the sink hit and stack window
-can be proven.
-
-## Protocol
-
-Versioned newline-delimited JSON. Same schema on stdio and unix sockets. See
-`docs/PROTOCOL.md`.
-
-Core methods:
-
-```
-session.create / session.close / session.status
-events.subscribe / events.cursor
-heap.query / heap.snapshot / heap.predict / heap.introspect /
-heap.baseline / heap.diff / heap.recipe /
-mem.read / mem.write / regs.get / stack.get
-break.set / break.clear / watch.set / watch.clear
-pause / resume / step / mark
-sink.register / hijack.watch / rop.arm
-wait / assert / export
+```text
+NORMAL -> SUSPECT -> PRIMITIVE -> CONTROL-FLOW
 ```
 
-CLI commands: `run`, `attach`, `validate`, `agent`, `stdio`, `ctl`, `version`.
+- `SUSPECT`: score above threshold.
+- `PRIMITIVE`: anomaly plus repeated reuse, same-class free/alloc cycles,
+  tcache saturation, or a D7/D8/D9 finding.
+- `CONTROL-FLOW`: D5/D6/ROP or hijack-watch hit.
 
-## Build
+Findings:
+
+- `D10` heap timeline anomaly: info/medium/high, with window ID, metrics,
+  baseline key and contributing signals.
+- `D11` exploit-phase correlation: high/critical only when independent signals
+  agree.
+
+Timeline findings use window-scoped deduplication keys.
+
+## Protocol, CLI and Export
+
+Protocol additions:
+
+- `heap.timeline`
+- `heap.anomaly`
+- `heap.baseline` gains `mode: snapshot | learn` and `warmup_windows`
+
+CLI flags:
+
+- `--anomaly`
+- `--anomaly-window-ms`
+- `--anomaly-window-events`
+- `--anomaly-warmup`
+- `--baseline-in PATH`
+- `--baseline-out PATH`
+- `--content-sample`
+- `--content-sample-budget`
+
+Offline analysis:
 
 ```sh
-make generate    # clang compile bpf/ -> build/bpf/gofengshui.bpf.o
-                 # generate source/ebpf/object_generated.go
-make build       # CGO_ENABLED=0 -> build/gofengshui
-make test        # Go unit tests
-make clean
+gofengshui analyze --events events.jsonl --baseline-in benign.json --out analysis/
 ```
 
-The final binary embeds the BPF object as a Go byte slice. The object is
-compiled at build time and lives in `build/`; only generated Go source lives
-in `source/`.
+Exports:
 
-## Deployment
+- `timeline.jsonl`
+- `baseline-model.json`
+- `anomalies.json`
+- a heap timeline section in `report.md`
 
-- Requires root or `CAP_BPF`, `CAP_PERFMON`, `CAP_SYS_PTRACE`
-  (+ `CAP_SYS_ADMIN` in practice).
-- Default container seccomp profiles block `bpf(2)`; use `seccomp=unconfined`.
-- `/sys/kernel/btf/vmlinux` must be visible if kernel BTF is used.
-- Rootless podman cannot run eBPF when `unprivileged_bpf_disabled=2`.
-- Privileged Go commands live in `toolchain/` and are executed manually by the
-  host operator during development.
+## Implementation Phases
 
-## Milestones
+### Phase 0 — Timeline schema and offline replay
 
-### M0 — Scaffold and privileged harness
+- window and histogram types
+- incremental collector and replay from `[]core.Event`
+- offline event-frame parser
+- synthetic unit tests
 
-- Directory layout, Makefile, BPF build, loader, test harness, toolchain commands.
-- Acceptance: static agent runs in privileged container; malloc/free JSONL
-  events; double free detected.
+Acceptance: stable histograms and window boundaries from replayed events.
 
-### M1 — eBPF tracing and remote protocol
+### Phase 1 — Live timeline, protocol and export
 
-- glibc adapter, heap model, syscall tracing, symbol resolver.
-- Detectors D1–D4, D6.
-- JSONL stdio + unix socket, session commands.
-- Acceptance: UAF/overflow detected; heap history queryable over both
-  transports.
+- feed the collector from the live session pump
+- `heap.timeline` protocol method
+- `timeline.jsonl` and `heap.json` integration
+- live tests and benchmarks
 
-### M2 — ptrace control and ROP proof
+Acceptance: live windows are queryable and exported without ringbuf drops.
 
-- Spawn/attach, pause/resume, regs/mem, breakpoints, watchpoints, step.
-- Sink registration, hijack watch, ROP trace, gadget classification,
-  assertions, export.
-- Acceptance: stack-overflow PoC reaches sink with expected registers; full
-  executed chain exported and disassembled.
+### Phase 2 — Baseline learning and D10
 
-### M3 — Hardening
+- warmup and stored baseline model
+- robust statistics, histogram divergence and rate z-scores
+- D10 findings with window-scoped dedup
+- CLI flags and report section
 
-- Full multi-thread debug-register inheritance and stop-the-world.
-- fork/exec follow, dlopen rescan.
-- allocator metadata inspection.
-- Additional detectors and performance tuning.
-- musl/Go investigation.
+Acceptance: benign fixtures stay below threshold; concentration and grooming
+fixtures trigger D10.
+
+### Phase 3 — Sampled content analysis
+
+- safe periodic pause/sample/resume path
+- stratified chunk selection and aggregate content metrics
+- content baseline and scoring integration
+
+Acceptance: synthetic high-entropy and patterned buffers classify correctly;
+sampling overhead remains bounded.
+
+### Phase 4 — D11 phase correlation
+
+- phase state machine
+- correlation with D5/D6/D7/D8/D9 and ROP results
+- severity and evidence aggregation
+
+Acceptance: exploit fixtures trigger D11; benign fixtures do not.
+
+### Phase 5 — Validation and tuning
+
+- offline replay and threshold calibration
+- benign versus exploit fixture matrix
+- detection latency, false-positive rate and overhead measurements
+- docs and CI expectations
+
+## Current Status
+
+As of 2026-10-31:
+
+- Phases 0-4 are implemented.
+- Phase 2.1 is partial: the baseline uses median/MAD but not EWMA or per-class
+  quantile bands.
+- Phase 5 is partial: offline analysis, a privileged anomaly e2e case, docs and
+  report assertions are in place; the full regression, benign false-positive
+  matrix, exploit detection-latency matrix and overhead measurements are not.
+- The privileged `sudo -E make e2e-anomaly` case passes. It emits D10 on the
+  `anomaly_groom` fixture and validates the timeline/anomaly/baseline exports.
+- Fast targets can finish warmup before the first content-sampling tick, so the
+  content baseline can be empty in short runs.
+
+See `docs/TASKS.md` for task-level status and `HANDOVER.md` for the next
+session checklist.
+
+## Next Work
+
+1. Run the full privileged regression: `sudo -E make e2e`.
+2. Run the complete benign and exploit fixture matrices and record
+   false-positive rate and detection latency.
+3. Use the measurements to tune D10 thresholds and the content-sampling cadence.
+4. Add EWMA and per-class quantile bands.
+5. Ensure content is sampled during warmup on fast targets.
+6. Measure timeline and content-sampling overhead.
+
+## Validation
+
+Benign fixtures:
+
+- `alloc_loop`, `realloc_churn`, `threads`, `attach_threads`
+- `dlopen_alloc`, `cxx_alloc`, `arena_backfill`
+
+Exploit fixtures:
+
+- `poison`, `metadata`, `size_swap`, `uaf_direct`
+- `overflow`, `double_free`, `rop_sink`
+
+Content fixtures:
+
+- synthetic buffers with known entropy, pointer density and repeated qwords
+
+Regression checks:
+
+- existing D1–D9 behavior stays unchanged
+- BPF drop accounting remains zero on the privileged suite
+- no new false positives on the clean fixture
 
 ## Risks and Limits
 
-- Glibc internals vary by version; header parsing is validated and falls back.
-- eBPF cannot observe every arbitrary load/store. Precise coverage requires
-  syscalls, selected libc functions, and hardware watchpoints.
-- Hardware watchpoints: four slots per thread.
-- IFUNC-resolved libc functions complicate `memcpy` hooks; opt-in only.
-- User stack depth needs frame pointers; test harnesses use
-  `-fno-omit-frame-pointer`.
-- Multi-thread precision is limited in v1.
-- D7 can report a medium-severity link for tcache neighbors that were freed
-  before an attach session started; spawn mode has a complete free history.
-- Direct introspection depends on the target libc exposing
-  `R_X86_64_TPOFF64` relocations and on supported tcache arena layouts.
-  Glibc 2.43 is treated as the 2.42 layout fallback because its release was
-  not separately characterized; the live snapshot overrides the version
-  fallback where possible. Large tcache bins (a tunable beyond the default
-  0x410 ceiling) are observation-only.
-- `--oom` captures OOM kill events host-wide. The OOM kill may be reported in a
-  kernel-reaper context outside the target cgroup, so the event is not
-  cgroup-filtered; use it only in a sandboxed environment.
-- ASLR and scheduling limit determinism; use relative offsets and recorded
-  baselines.
-- The agent drops events whose task name matches its own. This prevents its
-  protocol writes from feeding back into the event stream, but a target with
-  the same `comm` as the agent would have its events suppressed; invoke the
-  agent under a distinct name when tracing such a target. Kernel OOM events are
-  exempt from this filter because the OOM killer can run in the agent's task
-  context while the victim is the target.
-- The agent is root-equivalent and belongs in a sandboxed CTF/CI environment.
-
-## Current Implementation Status
-
-See `docs/TASKS.md` for the per-task implemented/tested/verified matrix.
-
-Implemented and locally tested:
-
-- containerized e2e suite in a separate `e2e-tests` Go module, with
-  per-case Containerfiles, host-side podman orchestration, and victim tests
-  compiled with `go test -c -tags victim`
-- glibc e2e case plus a glibc base-image matrix and an Alpine/musl case
-- `make e2e` root workflow with per-test logs and host-side report assertions
-- repository/build pipeline and embedded BPF object generation
-- glibc allocator uprobes and raw syscall tracing source
-- heap model, tombstones, D1/D2/D3 findings
-- glibc allocator profiles (including the 2.42 tcache layout and 2.44
-  no-fastbin/16-slot behavior), safe-linking-aware prediction and D7 tcache
-  link anomaly detection
-- live tcache/arena introspection via stripped-libc TLS relocation discovery
-  (`heap.introspect`), with observed-bin prediction
-- realloc-aware heap timeline, baseline diffs and spray recipe generation
-- live hardware watchpoints on heap-model allocation IDs
-- opt-in automatic write watchpoints on recently freed chunks (`--watch-freed`)
-- D8 chunk/next-chunk metadata validation at free() entry
-- D9 allocated-vs-free chunk size consistency checks
-- per-arena fastbin/smallbin modeling with per-thread tcache
-- kernel OOM tracepoint/kprobe integration
-- direct UAF writes caught by freed-chunk auto-watchpoints
-- ringbuf/drop accounting, stack sampling controls and model benchmarks
-- versioned release artifacts (`make dist`) with checksums
-- dlopen rescan with per-thread allocator probe reattachment (`maps.refresh`)
-- C++ new/delete labelling for libstdc++ allocations
-- attach-time thread-arena backfill with heap_info validation
-- D6 fault-address classification and stack-window summary via ptrace
-- D2 checks for openat/execve paths and sendfile/splice offset pointers
-- JSONL protocol, stdio and unix transports
-- ptrace launch/attach, pause/resume, registers, memory, single-step,
-  hardware break/watchpoint installation
-- sink registration, hijack watch, ROP single-step tracing source,
-  gadget classification and report export
-- multi-thread clone hooks, process-wide allocator probes, stop-the-world,
-  and fork/exec follow with allocator reattachment
-- CLI `run`, `attach`, `validate`, `agent`, `stdio`, `ctl`
-- `--no-ebpf` diagnostic mode for ptrace-only validation
-
-Privileged end-to-end verification (2026-10-22):
-
-- eBPF object loaded and allocator uprobes attached
-- allocator/syscall event delivery confirmed
-- D1 double-free, D2 UAF and D3 heap overflow observed on live targets
-- D7 tcache link anomaly observed on glibc 2.39; allocator detection and an
-  explicit 2.31 override verified end-to-end
-- D8 metadata corruption and D9 size overwrites detected at free() entry
-- kernel OOM kills captured through the `oom_kill_process` tracepoint/kprobe
-- D6 fault address/classification, crash stack hits, and D2 checks across
-  openat/execve/sendfile/splice verified end-to-end
-- direct-UAF writes caught by freed-chunk auto-watchpoints
-- realloc churn, baseline diff and spray recipe verified end-to-end
-- thread-arena attach backfill verified end-to-end
-- C++ new/delete labelling and dlopen allocator reattachment verified
-- per-arena prediction, zero ringbuf drops and sampled stacks verified
-- ROP flow reached `gfs_sink` with `RDI=0x4141` and `verified: true`
-
-Deferred:
-
-- memcg OOM tracepoints
-- race/TOCTOU correlation research
-- musl and Go runtime backends, arm64 support
+- Workload-dependent allocation patterns make false positives the main risk;
+  a learned or stored baseline is required for high confidence.
+- Content sampling adds pauses and must not disrupt active ROP traces or
+  watchpoints.
+- Ringbuf drops and sampled stacks reduce confidence; scores must account for
+  them.
+- Heap anomalies can also come from benign phases such as startup, cache warmup
+  or batch jobs; phase markers and warmup windows mitigate this.
+- `D10`/`D11` are probabilistic evidence. They do not prove an unknown
+  vulnerability exists.
+- The agent remains root-equivalent and belongs in a sandboxed environment.

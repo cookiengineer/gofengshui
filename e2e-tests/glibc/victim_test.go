@@ -184,6 +184,26 @@ func TestGlibcDetectors(t *testing.T) {
 	})
 }
 
+func TestGlibcAnomaly(t *testing.T) {
+	r := agentrun.NewRunner(t)
+
+	res := runFind(t, r, "anomaly", "anomaly_groom", "D10",
+		"--anomaly",
+		"--anomaly-warmup", "4",
+		"--anomaly-window-events", "64",
+		"--content-sample",
+		"--content-sample-ms", "50",
+		"--content-sample-chunks", "16",
+	)
+	checks.RequireFinding(t, checks.LoadFrames(t, res.EventsPath), "D10")
+	for _, name := range []string{"timeline.jsonl", "anomalies.json", "baseline-model.json"} {
+		if _, err := os.Stat(filepath.Join(res.ReportDir, name)); err != nil {
+			t.Fatalf("missing %s: %v", name, err)
+		}
+	}
+	checks.RequireBaselineContent(t, filepath.Join(res.ReportDir, "baseline-model.json"))
+}
+
 func TestGlibcProfiles(t *testing.T) {
 	r := agentrun.NewRunner(t)
 

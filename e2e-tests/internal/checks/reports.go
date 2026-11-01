@@ -23,6 +23,11 @@ type HeapReport struct {
 	BPF           json.RawMessage     `json:"bpf"`
 }
 
+type BaselineReport struct {
+	Windows int                  `json:"windows"`
+	Content heap.ContentBaseline `json:"content"`
+}
+
 type SummaryReport struct {
 	Session  string              `json:"session"`
 	Target   core.Target         `json:"target"`
@@ -45,6 +50,22 @@ func LoadSummary(t testing.TB, path string) SummaryReport {
 	t.Helper()
 	var report SummaryReport
 	DecodeJSON(t, RequireFile(t, path), &report, path)
+	return report
+}
+
+func LoadBaseline(t testing.TB, path string) BaselineReport {
+	t.Helper()
+	var report BaselineReport
+	DecodeJSON(t, RequireFile(t, path), &report, path)
+	return report
+}
+
+func RequireBaselineContent(t testing.TB, path string) BaselineReport {
+	t.Helper()
+	report := LoadBaseline(t, path)
+	if report.Content.Samples.Count == 0 {
+		t.Fatalf("baseline content was not seeded: %s", path)
+	}
 	return report
 }
 

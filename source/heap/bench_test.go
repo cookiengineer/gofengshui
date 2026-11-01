@@ -62,3 +62,17 @@ func BenchmarkCheckAccess(b *testing.B) {
 		m.CheckAccess(0x10000, 8, 1, now)
 	}
 }
+
+func BenchmarkTimelineObserve(b *testing.B) {
+	tl := NewTimeline(DefaultTimelineConfig())
+	ev := core.Event{PID: 1, TID: 1, Addr: 0x10000, Size: 0x20, ReqSize: 0x18}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ev.Timestamp = time.Unix(0, int64(i*2))
+		ev.Type = core.EventAlloc
+		tl.Observe(ev)
+		ev.Type = core.EventFree
+		tl.Observe(ev)
+	}
+}

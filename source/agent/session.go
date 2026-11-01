@@ -86,24 +86,27 @@ type Session struct {
 
 	stops chan debugger.Stop
 
-	markers    []Marker
-	baselines  map[string]heap.Baseline
-	lastRecipe *heap.Recipe
-	autoWatch  map[uint64]bool
-	autoAddr   map[uint64]uint64
-	autoOrder  []uint64
-	backfill   *heap.BackfillStats
-	sink       *SinkInfo
-	hijack     *HijackState
-	rop        *ROPState
-	lastROP    *ROPResult
-	lastSink   *SinkHit
-	lastStop   *debugger.Stop
-	ropDone    chan *ROPResult
-	started    time.Time
+	markers       []Marker
+	baselines     map[string]heap.Baseline
+	baselineModel *heap.BaselineModel
+	lastRecipe    *heap.Recipe
+	autoWatch     map[uint64]bool
+	autoAddr      map[uint64]uint64
+	autoOrder     []uint64
+	backfill      *heap.BackfillStats
+	sink          *SinkInfo
+	hijack        *HijackState
+	rop           *ROPState
+	lastROP       *ROPResult
+	lastSink      *SinkHit
+	lastStop      *debugger.Stop
+	ropDone       chan *ROPResult
+	started       time.Time
 
 	introspection   *heap.Introspection
 	introspectionTS time.Time
+	content         *heap.ContentSummary
+	contentWake     chan struct{}
 }
 
 func detectEngine(m *heap.Model) *detect.Engine { return detect.New(m) }
@@ -116,8 +119,14 @@ func (s *Session) start() {
 	if s.stops == nil {
 		s.stops = make(chan debugger.Stop, 256)
 	}
+	if s.contentWake == nil {
+		s.contentWake = make(chan struct{}, 1)
+	}
 	s.mu.Unlock()
 	go s.pump()
+	if s.cfg.ContentSample {
+		go s.contentLoop()
+	}
 }
 
 func (s *Session) pump() {
@@ -129,6 +138,7 @@ func (s *Session) pump() {
 	}
 	tracerStops := s.tracer.Stops()
 	tracerErrs := s.tracer.Errors()
+	lastCompleted := s.engine.Timeline().Completed()
 	for {
 		select {
 		case <-s.done:
@@ -146,6 +156,10 @@ func (s *Session) pump() {
 			for _, f := range s.engine.Observe(ev) {
 				fc := f
 				s.broadcast("finding", StreamEvent{Kind: "finding", Finding: &fc})
+			}
+			if completed := s.engine.Timeline().Completed(); completed != lastCompleted {
+				lastCompleted = completed
+				s.wakeContent()
 			}
 			s.updateAutoWatch(ev)
 		case err, ok := <-bpfErrs:
@@ -267,9 +281,13 @@ func (s *Session) classifyCrash(st debugger.Stop) {
 		ID: "D6", Severity: sev, Message: msg, Event: &evCopy, Timestamp: st.Timestamp,
 		Details: details,
 	}
-	s.engine.Add(f)
+	extra := s.engine.Add(f)
 	fc := f
 	s.broadcast("finding", StreamEvent{Kind: "finding", Finding: &fc})
+	for _, x := range extra {
+		xc := x
+		s.broadcast("finding", StreamEvent{Kind: "finding", Finding: &xc})
+	}
 }
 
 func faultAccess(code int32) string {
@@ -400,6 +418,10 @@ func (s *Session) Handle(ctx context.Context, conn *transport.Conn, f *proto.Fra
 		s.heapSnapshot(conn, f)
 	case proto.MethodHeapAnalyze:
 		s.reply(conn, f, s.model.Analyze(), nil)
+	case proto.MethodHeapTimeline:
+		s.heapTimeline(conn, f)
+	case proto.MethodHeapAnomaly:
+		s.heapAnomaly(conn, f)
 	case proto.MethodHeapPredict:
 		s.heapPredict(conn, f)
 	case proto.MethodHeapIntrospect:
@@ -564,14 +586,56 @@ func (s *Session) heapQuery(conn *transport.Conn, f *proto.Frame) {
 	}, nil)
 }
 
+func (s *Session) heapTimeline(conn *transport.Conn, f *proto.Frame) {
+	var p struct {
+		Since uint64 `json:"since"`
+		Limit int    `json:"limit"`
+	}
+	_ = f.DecodeParams(&p)
+	windows := s.engine.Timeline().Snapshot()
+	if p.Since != 0 {
+		filtered := windows[:0]
+		for _, w := range windows {
+			if w.ID > p.Since {
+				filtered = append(filtered, w)
+			}
+		}
+		windows = filtered
+	}
+	if p.Limit > 0 && len(windows) > p.Limit {
+		windows = windows[len(windows)-p.Limit:]
+	}
+	s.reply(conn, f, map[string]any{
+		"windows": windows,
+		"count":   len(windows),
+		"config":  s.engine.Timeline().Config(),
+	}, nil)
+}
+
 func (s *Session) heapBaseline(conn *transport.Conn, f *proto.Frame) {
 	var p struct {
 		Name string `json:"name"`
 		Path string `json:"path"`
+		Mode string `json:"mode"`
 	}
 	_ = f.DecodeParams(&p)
 	if p.Name == "" {
 		p.Name = "default"
+	}
+	if p.Mode == "learn" {
+		b, err := s.learnAnomalyBaseline(p.Name)
+		if err != nil {
+			s.reply(conn, f, nil, &proto.Error{Code: "baseline_failed", Message: err.Error()})
+			return
+		}
+		if p.Path != "" {
+			if err := heap.SaveBaseline(p.Path, *b); err != nil {
+				s.reply(conn, f, nil, &proto.Error{Code: "export_failed", Message: err.Error()})
+				return
+			}
+		}
+		s.reply(conn, f, map[string]any{"name": p.Name, "path": p.Path, "baseline_model": b}, nil)
+		return
 	}
 	b := s.model.CaptureBaseline(p.Name)
 	s.mu.Lock()
@@ -1388,6 +1452,14 @@ func (s *Session) Close(kill bool) {
 	s.subs = make(map[uint64]*subscriber)
 	s.mu.Unlock()
 
+	if s.cfg.BaselineOut != "" {
+		if tracker := s.engine.Anomaly(); tracker != nil {
+			if b := tracker.Baseline(); b != nil {
+				_ = heap.SaveBaseline(s.cfg.BaselineOut, *b)
+			}
+		}
+	}
+
 	close(s.done)
 	for _, sub := range subs {
 		sub.once.Do(func() { close(sub.done) })
@@ -1476,7 +1548,17 @@ func (s *Session) Export(dir string) error {
 	}
 	markers := append([]Marker(nil), s.markers...)
 	introspection := s.introspection
+	baselineModel := s.baselineModel
+	content := s.content
 	s.mu.Unlock()
+
+	var anomalyScores []heap.AnomalyScore
+	if tracker := s.engine.Anomaly(); tracker != nil {
+		anomalyScores = tracker.Recent()
+		if b := tracker.Baseline(); b != nil {
+			baselineModel = b
+		}
+	}
 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -1484,23 +1566,45 @@ func (s *Session) Export(dir string) error {
 	if err := export.JSONL(filepath.Join(dir, "events.jsonl"), frames); err != nil {
 		return err
 	}
+	timelineWindows := s.engine.Timeline().Snapshot()
+	if err := export.JSONLRecords(filepath.Join(dir, "timeline.jsonl"), timelineWindows); err != nil {
+		return err
+	}
 	if err := export.JSON(filepath.Join(dir, "heap.json"), map[string]any{
-		"allocations":   s.model.Allocations(false),
-		"tombstones":    s.model.Tombstones(),
-		"mappings":      s.model.Mappings(),
-		"stats":         s.model.Stats(),
-		"profile":       s.model.Profile(),
-		"analysis":      s.model.Analyze(),
-		"introspection": introspection,
-		"backfill":      backfill,
-		"bpf":           bpfValue(bpfStats, hasBPF),
-		"findings":      s.engine.Recent(),
+		"allocations":    s.model.Allocations(false),
+		"tombstones":     s.model.Tombstones(),
+		"mappings":       s.model.Mappings(),
+		"stats":          s.model.Stats(),
+		"profile":        s.model.Profile(),
+		"analysis":       s.model.Analyze(),
+		"timeline":       timelineWindows,
+		"anomalies":      anomalyScores,
+		"baseline_model": baselineModel,
+		"introspection":  introspection,
+		"backfill":       backfill,
+		"bpf":            bpfValue(bpfStats, hasBPF),
+		"findings":       s.engine.Recent(),
 	}); err != nil {
 		return err
 	}
 	if len(baselines) > 0 {
 		if err := export.JSON(filepath.Join(dir, "baselines.json"), baselines); err != nil {
 			return err
+		}
+	}
+	if len(anomalyScores) > 0 {
+		if err := export.JSON(filepath.Join(dir, "anomalies.json"), anomalyScores); err != nil {
+			return err
+		}
+	}
+	if baselineModel != nil {
+		if err := export.JSON(filepath.Join(dir, "baseline-model.json"), baselineModel); err != nil {
+			return err
+		}
+		if s.cfg.BaselineOut != "" {
+			if err := heap.SaveBaseline(s.cfg.BaselineOut, *baselineModel); err != nil {
+				return err
+			}
 		}
 	}
 	if recipe != nil {
@@ -1518,12 +1622,14 @@ func (s *Session) Export(dir string) error {
 		"profile": s.model.Profile(),
 		"stats":   s.model.Stats(), "sink": sink, "rop": rop,
 		"markers": markers, "backfill": backfill,
+		"anomalies": len(anomalyScores), "baseline_model": baselineModel,
+		"content":       content,
 		"introspection": introspection,
 		"bpf":           bpfValue(bpfStats, hasBPF),
 	}); err != nil {
 		return err
 	}
-	return export.Report(filepath.Join(dir, "report.md"), s.id, s.target, s.model.Profile(), s.model.Stats(), sink, rop, s.engine.Recent())
+	return export.Report(filepath.Join(dir, "report.md"), s.id, s.target, s.model.Profile(), s.model.Stats(), sink, rop, s.engine.Recent(), anomalyScores)
 }
 
 // WaitStop waits for a ptrace stop matching pred.
