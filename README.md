@@ -139,7 +139,7 @@ The documentation is LLM generated, but has been reviewed and is correct.
 
 - [DEVELOPMENT.md](docs/DEVELOPMENT.md) documents harness workflow.
 - [TESTING.md](docs/TESTING.md) documents testing matrix, environment variables, log output and (agentic) triage instructions.
-- [PLAN.md](docs/TASKS.md) and [TASKS.md](docs/TASKS.md) document remaining Future Work.
+- [PLAN.md](docs/PLAN.md) and [TASKS.md](docs/TASKS.md) document remaining Future Work.
 
 ## Security
 
