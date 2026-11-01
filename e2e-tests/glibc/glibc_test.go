@@ -130,11 +130,13 @@ func verifyGlibcAnomalyMatrix(t *testing.T, reports string) {
 
 func TestGlibcMatrix(t *testing.T) {
 	harness.RequireRoot(t)
+	if !harness.EnvBool("GFS_E2E_GLIBC_MATRIX") {
+		t.Skip("set GFS_E2E_GLIBC_MATRIX=1 to run the old-glibc matrix (pulls debian:11-slim and debian:12-slim)")
+	}
 	run := harness.NewRun(t)
 	cases := []caseSpec{
-		{name: "glibc-ubuntu-20.04", variant: "ubuntu-20.04", baseImage: "ubuntu:20.04", safeLinking: false},
-		{name: "glibc-ubuntu-22.04", variant: "ubuntu-22.04", baseImage: "ubuntu:22.04", safeLinking: true},
-		{name: "glibc-debian-12", variant: "debian-12", baseImage: "debian:12", safeLinking: true},
+		{name: "glibc-debian-11", variant: "debian-11", baseImage: "debian:11-slim", safeLinking: false},
+		{name: "glibc-debian-12", variant: "debian-12", baseImage: "debian:12-slim", safeLinking: true},
 	}
 	for _, spec := range cases {
 		spec := spec

@@ -58,7 +58,7 @@ E2E_LOG := $(BUILD_DIR)/logs/e2e-$$(date +%Y%m%d-%H%M%S).log
 TOOLCHAIN_DIR := toolchain
 TOOLCHAIN_BIN := $(BUILD_DIR)/toolchain
 
-.PHONY: all build generate bpf test test-c bench dist clean fmt vet e2e e2e-anomaly e2e-anomaly-matrix e2e-image e2e-clean \
+.PHONY: all build generate bpf test test-c bench dist clean fmt vet e2e e2e-anomaly e2e-anomaly-matrix e2e-glibc-matrix e2e-musl e2e-image e2e-clean \
         toolchain toolchain-test toolchain-vet check-env dev-image dev-container host-agent fix-permissions
 
 all: build
@@ -134,12 +134,32 @@ e2e-anomaly-matrix:
 	  chown -R "$${SUDO_UID:-0}:$${SUDO_GID:-0}" $(BUILD_DIR)/e2e $(BUILD_DIR)/logs $(BUILD_DIR)/gofengshui $(BUILD_DIR)/bpf source/ebpf/object_generated.go 2>/dev/null || true; \
 	  exit $$status
 
+e2e-glibc-matrix: SHELL := /bin/bash
+e2e-glibc-matrix:
+	@test "$$(id -u)" = "0" || { echo "e2e glibc matrix must run as root; use: sudo -E make e2e-glibc-matrix"; exit 1; }
+	@mkdir -p $(BUILD_DIR)/logs
+	@log="$$(pwd)/$(E2E_LOG)"; ln -sfn "$$log" $(BUILD_DIR)/logs/latest-e2e.log; \
+	  GFS_E2E_GLIBC_MATRIX=1 GFS_E2E_PULL=1 $(GO) -C $(E2E_DIR) test -count=1 -p 1 -timeout=45m -v ./glibc -run '^TestGlibcMatrix$$' 2>&1 | tee -a "$$log"; status=$${PIPESTATUS[0]}; \
+	  chown -R "$${SUDO_UID:-0}:$${SUDO_GID:-0}" $(BUILD_DIR)/e2e $(BUILD_DIR)/logs $(BUILD_DIR)/gofengshui $(BUILD_DIR)/bpf source/ebpf/object_generated.go 2>/dev/null || true; \
+	  exit $$status
+
+e2e-musl: SHELL := /bin/bash
+e2e-musl:
+	@test "$$(id -u)" = "0" || { echo "e2e musl test must run as root; use: sudo -E make e2e-musl"; exit 1; }
+	@mkdir -p $(BUILD_DIR)/logs
+	@log="$$(pwd)/$(E2E_LOG)"; ln -sfn "$$log" $(BUILD_DIR)/logs/latest-e2e.log; \
+	  GFS_E2E_MUSL=1 $(GO) -C $(E2E_DIR) test -count=1 -p 1 -timeout=30m -v ./musl 2>&1 | tee -a "$$log"; status=$${PIPESTATUS[0]}; \
+	  chown -R "$${SUDO_UID:-0}:$${SUDO_GID:-0}" $(BUILD_DIR)/e2e $(BUILD_DIR)/logs $(BUILD_DIR)/gofengshui $(BUILD_DIR)/bpf source/ebpf/object_generated.go 2>/dev/null || true; \
+	  exit $$status
+
 e2e-image: dev-image
 
 e2e-clean:
 	@test "$$(id -u)" = "0" || { echo "run: sudo -E make e2e-clean"; exit 1; }
 	-podman ps -aq --filter label=gofengshui.e2e=1 | xargs -r podman rm -f
-	rm -rf $(BUILD_DIR)/e2e
+	-podman images --format '{{.Repository}}:{{.Tag}}' | grep '^localhost/gofengshui-e2e/' | xargs -r podman rmi -f
+	-podman builder prune -f
+	rm -rf $(BUILD_DIR)/e2e $(BUILD_DIR)/reports
 
 bench: generate
 	$(GO) -C source test -run '^$$' -bench . -benchmem ./heap

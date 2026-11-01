@@ -14,6 +14,9 @@ import (
 
 func TestMusl(t *testing.T) {
 	harness.RequireRoot(t)
+	if !harness.EnvBool("GFS_E2E_MUSL") {
+		t.Skip("musl allocator tracing is not implemented; set GFS_E2E_MUSL=1 to run")
+	}
 	run := harness.NewRun(t)
 	c := run.NewCase("musl")
 	c.Preflight()
