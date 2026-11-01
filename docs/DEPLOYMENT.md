@@ -113,10 +113,14 @@ Or run the e2e suite non-interactively as root:
 sudo -E make e2e
 ```
 
-Run only the anomaly case while tuning D10/D11:
+The default suite uses only the local `ubuntu:24.04` image. Focused anomaly
+cases and opt-in suites:
 
 ```sh
-sudo -E make e2e-anomaly
+sudo -E make e2e-anomaly          # focused D10 case
+sudo -E make e2e-anomaly-matrix   # benign FPR + exploit latency + overhead
+sudo -E make e2e-glibc-matrix     # debian:11-slim / debian:12-slim (opt-in)
+sudo -E make e2e-musl             # Alpine (opt-in, incomplete)
 ```
 
 The Go e2e harness builds the agent and case images, starts one privileged
@@ -129,8 +133,9 @@ cgroup to trigger against.
 
 Logs are written to `build/logs/e2e-*.log` with the
 `build/logs/latest-e2e.log` symlink. Per-test logs and reports are written under
-`build/e2e/<timestamp>-<pid>/<case>/`. See `docs/DEVELOPMENT.md` for the
-unprivileged/privileged handoff, log locations, and failure triage.
+`build/e2e/<timestamp>-<pid>/<case>/`. See `docs/TESTING.md` for the full test
+matrix, environment variables, report layout, disk cleanup and failure triage,
+and `docs/DEVELOPMENT.md` for harness internals.
 
 Expected results:
 

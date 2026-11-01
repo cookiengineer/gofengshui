@@ -39,7 +39,7 @@ Currently targets dynamically linked glibc C/C++ programs on `x86_64`.
 ```sh
 make generate    # compile bpf/ and embed the object
 make build       # static build/gofengshui
-make test        # Go unit tests
+make test        # Go unit tests + toolchain tests
 make test-c      # build C/C++ test fixtures
 make bench       # heap-model benchmarks
 make dist        # release tarball + sha256
@@ -47,110 +47,37 @@ make dist        # release tarball + sha256
 
 ## Testing
 
-### Unprivileged tests
-
-Run the source unit tests, fixture builds, vetting, and benchmarks without
-root:
+Quick unprivileged checks:
 
 ```sh
 make test
 make test-c
 make vet
 make bench
+go -C e2e-tests test ./internal/... -count=1
 ```
 
-The e2e harness also has unprivileged unit tests:
-
-```sh
-go -C e2e-tests test ./internal/...
-```
-
-Read-only host and eBPF diagnostics:
-
-```sh
-make check-env
-```
-
-### Privileged e2e tests
-
-The container suite loads real eBPF and uses rootful podman, so it must run as
-root:
+Run the privileged container suite with rootful podman, and with eBPF-module in the host kernel tests:
 
 ```sh
 sudo -E make e2e
 ```
 
-This builds the agent and the glibc case image, starts a privileged container,
-compiles the victim tests with `go test -c -tags victim`, copies the binary into
-the container, executes it, and then validates the exported reports from the
-host. Running `make e2e` without `sudo` exits at the root guard and does not
-create a new log.
-
-Run only the anomaly case while iterating on D10/D11 or content sampling:
+Focused anomaly cases:
 
 ```sh
 sudo -E make e2e-anomaly
+sudo -E make e2e-anomaly-matrix
 ```
 
-That case runs the `anomaly_groom` fixture and verifies `D10`, `timeline.jsonl`,
-`anomalies.json` and `baseline-model.json`. The full suite remains the required
-regression before merging.
-
-The glibc base-image matrix runs as part of the suite. Allow pulling missing
-base images with:
+Opt-in suites:
 
 ```sh
-sudo -E GFS_E2E_PULL=1 make e2e
+sudo -E make e2e-glibc-matrix   # debian:11-slim and debian:12-slim
+sudo -E make e2e-musl           # Alpine; allocator tracing is incomplete
 ```
 
-Pull the Alpine image for the musl case:
-
-```sh
-sudo -E GFS_E2E_PULL=1 make e2e
-```
-
-The latest host log is:
-
-```text
-build/logs/latest-e2e.log
-```
-
-Per-test logs and reports are written under:
-
-```text
-build/e2e/<timestamp>-<pid>/<case>/
-```
-
-Useful environment variables:
-
-- `GFS_SKIP_BUILD=1` reuses the existing agent binary and case images.
-- `GFS_BPF_LOG=1` includes eBPF verifier output.
-- `GFS_MEMORY_LIMIT` overrides the container memory limit (default `2g`).
-- `GFS_E2E_KEEP=1` keeps the test container for inspection.
-- `GFS_E2E_PULL=1` allows pulling missing base images.
-- `GFS_IMAGE_PREFIX` and `GFS_IMAGE_TAG` override image naming.
-- `GFS_REPO_ROOT` overrides repository-root discovery.
-
-### Test case layout
-
-Each container case is self-contained:
-
-```text
-e2e-tests/<case>/
-  Containerfile
-  <case>_test.go   # //go:build !victim; builds images and manages podman
-  victim_test.go   # //go:build victim; runs inside the container
-```
-
-Compile a victim test binary manually with:
-
-```sh
-CGO_ENABLED=0 go -C e2e-tests test -c -tags victim \
-  -o build/e2e/<case>.victim.test ./<case>
-```
-
-See `docs/DEVELOPMENT.md` for adding cases, failure triage, and the full
-privileged workflow.
+The default suite uses only `ubuntu:24.04`.
 
 ## Quick Start
 
@@ -190,18 +117,29 @@ previously learned baseline.
 
 ## Requirements
 
-- Linux x86_64, kernel with BTF, uprobes, and ringbuf support
+- Linux `x86_64`, kernel with `BTF`, `uprobes`, and `ringbuf` support
 - `CAP_BPF`, `CAP_PERFMON`, `CAP_SYS_PTRACE` (usually `CAP_SYS_ADMIN`)
 - `seccomp=unconfined` in containers
 - `/sys/kernel/btf/vmlinux` visible for kernel BTF
 
 ## Current Status
 
-The anomaly-detection phases 0-4 are implemented. Phase 5 validation is still
-in progress: the anomaly e2e case passes, but the full privileged regression,
-benign false-positive matrix, exploit detection-latency matrix and overhead
-measurements are still pending. See `docs/TASKS.md` for the task-level status
-and `HANDOVER.md` for the next-session checklist.
+The memory histogram anomaly detection is implemented and working.
+
+The focused anomaly end-to-end test case and the validation matrix tests
+are passing and detecting correctly benign memory allocations and are
+correctly detecting exploit anomalies, across window boundaries.
+
+The muslc allocator tracing is still incomplete, see the `docs/` folder
+for documentation on what's remaining to implement in that regard.
+
+## Documentation
+
+The documentation is LLM generated, but has been reviewed and is correct.
+
+- [DEVELOPMENT.md](docs/DEVELOPMENT.md) documents harness workflow.
+- [TESTING.md](docs/TESTING.md) documents testing matrix, environment variables, log output and (agentic) triage instructions.
+- [PLAN.md](docs/TASKS.md) and [TASKS.md](docs/TASKS.md) document remaining Future Work.
 
 ## Security
 
